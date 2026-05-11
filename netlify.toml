@@ -1,0 +1,7 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# If you add env vars in Netlify UI, make sure Vite can read them
+# (Vite exposes only variables prefixed with VITE_ at build time).
+
