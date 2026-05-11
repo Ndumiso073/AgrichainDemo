@@ -9,31 +9,32 @@ import '@fontsource/inter'
 export default function OTPVerify() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { profile } = useAuth()
+  const { profile, loading } = useAuth()
 
   const email   = location.state?.email   || ''
   const skipOtp = location.state?.skipOtp || false
 
   const [otp, setOtp]             = useState(['', '', '', '', '', ''])
   const [error, setError]         = useState('')
-  const [loading, setLoading]     = useState(false)
+  const [loadingVerify, setLoadingVerify] = useState(false)
   const [resending, setResending] = useState(false)
   const [countdown, setCountdown] = useState(60)
   const [verified, setVerified]   = useState(false)
   const inputRefs = useRef([])
+  const redirected = useRef(false)
 
-  // skipOtp redirect — waits for profile, has 3s fallback
+  // skipOtp: only redirect once profile is loaded
   useEffect(() => {
     if (!skipOtp) return
-    if (profile) {
-      if (profile.role === 'farmer') navigate('/farmer')
-      else if (profile.role === 'buyer') navigate('/buyer')
-      else if (profile.role === 'admin') navigate('/admin')
-      return
-    }
-    const timer = setTimeout(() => navigate('/farmer'), 3000)
-    return () => clearTimeout(timer)
-  }, [skipOtp, profile, navigate])
+    if (loading) return          // still fetching session
+    if (!profile) return         // still fetching profile
+    if (redirected.current) return  // already redirected
+    redirected.current = true
+    if (profile.role === 'farmer') navigate('/farmer', { replace: true })
+    else if (profile.role === 'buyer') navigate('/buyer', { replace: true })
+    else if (profile.role === 'admin') navigate('/admin', { replace: true })
+    else navigate('/farmer', { replace: true })
+  }, [skipOtp, profile, loading, navigate])
 
   // Countdown timer
   useEffect(() => {
@@ -73,7 +74,7 @@ export default function OTPVerify() {
   }
 
   async function handleVerify(code) {
-    setLoading(true)
+    setLoadingVerify(true)
     setError('')
     try {
       const { error: verifyError } = await supabase.auth.verifyOtp({
@@ -83,17 +84,17 @@ export default function OTPVerify() {
       setVerified(true)
       setTimeout(() => {
         const role = profile?.role
-        if (role === 'farmer') navigate('/farmer')
-        else if (role === 'buyer') navigate('/buyer')
-        else if (role === 'admin') navigate('/admin')
-        else navigate('/farmer')
+        if (role === 'farmer') navigate('/farmer', { replace: true })
+        else if (role === 'buyer') navigate('/buyer', { replace: true })
+        else if (role === 'admin') navigate('/admin', { replace: true })
+        else navigate('/farmer', { replace: true })
       }, 1500)
     } catch (err) {
       setError('Invalid or expired code. Please try again.')
       setOtp(['', '', '', '', '', ''])
       inputRefs.current[0]?.focus()
     } finally {
-      setLoading(false)
+      setLoadingVerify(false)
     }
   }
 
@@ -114,6 +115,28 @@ export default function OTPVerify() {
     } finally {
       setResending(false)
     }
+  }
+
+  // Show loading spinner while waiting for profile on skipOtp
+  if (skipOtp && (loading || !profile)) {
+    return (
+      <div style={{
+        minHeight: '100vh', background: '#040902',
+        display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center', gap: '16px',
+      }}>
+        <div style={{
+          width: '36px', height: '36px', borderRadius: '50%',
+          border: '2px solid rgba(74,222,128,0.2)',
+          borderTopColor: '#4ade80',
+          animation: 'spin 0.7s linear infinite',
+        }} />
+        <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px', letterSpacing: '2px', textTransform: 'uppercase' }}>
+          Loading your profile...
+        </p>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    )
   }
 
   return (
@@ -140,11 +163,9 @@ export default function OTPVerify() {
       }} />
 
       <div style={{
-        position: 'relative', zIndex: 1,
-        width: '100%', maxWidth: '420px',
+        position: 'relative', zIndex: 1, width: '100%', maxWidth: '420px',
         background: 'rgba(255,255,255,0.03)',
-        backdropFilter: 'blur(24px)',
-        WebkitBackdropFilter: 'blur(24px)',
+        backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)',
         border: `1px solid ${verified ? 'rgba(74,222,128,0.5)' : 'rgba(74,222,128,0.15)'}`,
         borderRadius: '20px', padding: '48px 40px',
         boxShadow: verified
@@ -164,8 +185,7 @@ export default function OTPVerify() {
           <div style={{ textAlign: 'center' }}>
             <div style={{
               width: '64px', height: '64px', borderRadius: '50%',
-              background: 'rgba(74,222,128,0.12)',
-              border: '2px solid rgba(74,222,128,0.5)',
+              background: 'rgba(74,222,128,0.12)', border: '2px solid rgba(74,222,128,0.5)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               margin: '0 auto 20px', animation: 'pulse-green 1s ease infinite',
             }}>
@@ -181,28 +201,13 @@ export default function OTPVerify() {
               Identity confirmed. Redirecting...
             </p>
           </div>
-        ) : skipOtp && !profile ? (
-          <div style={{ textAlign: 'center' }}>
-            <div style={{
-              width: '32px', height: '32px', borderRadius: '50%',
-              border: '2px solid rgba(74,222,128,0.2)',
-              borderTopColor: '#4ade80',
-              animation: 'spin 0.7s linear infinite',
-              margin: '0 auto 16px',
-            }} />
-            <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>
-              Loading your profile...
-            </p>
-          </div>
         ) : (
           <>
             <div style={{ textAlign: 'center', marginBottom: '36px' }}>
               <div style={{
                 width: '56px', height: '56px', borderRadius: '50%',
-                background: 'rgba(74,222,128,0.08)',
-                border: '1px solid rgba(74,222,128,0.25)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                margin: '0 auto 16px',
+                background: 'rgba(74,222,128,0.08)', border: '1px solid rgba(74,222,128,0.25)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px',
               }}>
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="1.5">
                   <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
@@ -223,14 +228,13 @@ export default function OTPVerify() {
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', marginBottom: '24px' }}>
               {otp.map((digit, i) => (
                 <input
-                  key={i}
-                  ref={el => inputRefs.current[i] = el}
+                  key={i} ref={el => inputRefs.current[i] = el}
                   type="text" inputMode="numeric" maxLength={1}
                   value={digit}
                   onChange={e => handleOtpChange(i, e.target.value)}
                   onKeyDown={e => handleKeyDown(i, e)}
                   onPaste={i === 0 ? handlePaste : undefined}
-                  disabled={loading}
+                  disabled={loadingVerify}
                   style={{
                     width: '48px', height: '56px', textAlign: 'center',
                     fontSize: '22px', fontWeight: '700', color: '#fff',
@@ -238,7 +242,7 @@ export default function OTPVerify() {
                     border: `1px solid ${digit ? 'rgba(74,222,128,0.5)' : 'rgba(255,255,255,0.12)'}`,
                     borderRadius: '10px', outline: 'none', transition: 'all 0.15s ease',
                     caretColor: '#4ade80', fontFamily: "'Inter', sans-serif",
-                    cursor: loading ? 'not-allowed' : 'text',
+                    cursor: loadingVerify ? 'not-allowed' : 'text',
                   }}
                 />
               ))}
@@ -252,7 +256,7 @@ export default function OTPVerify() {
               }}>⚠ {error}</div>
             )}
 
-            {loading && (
+            {loadingVerify && (
               <div style={{ textAlign: 'center', marginBottom: '16px' }}>
                 <span style={{
                   display: 'inline-block', width: '20px', height: '20px', borderRadius: '50%',

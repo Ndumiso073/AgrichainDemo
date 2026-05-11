@@ -5,6 +5,7 @@ import ProtectedRoute from './components/ProtectedRoute'
 
 import Landing        from './pages/Landing'
 import Login          from './pages/Login'
+import Register       from './pages/Register'
 import OTPVerify      from './pages/OTPVerify'
 import Unauthorized   from './pages/Unauthorized'
 import FarmerDashboard  from './pages/FarmerDashboard'
@@ -14,6 +15,8 @@ import BuyerScanner     from './pages/BuyerScanner'
 import VerifyResult     from './pages/VerifyResult'
 import AdminDashboard   from './pages/AdminDashboard'
 import UserManagement   from './pages/UserManagement'
+import ForgotPassword from './pages/ForgotPassword'
+import ResetPassword  from './pages/ResetPassword'
 
 function App() {
   return (
@@ -23,8 +26,11 @@ function App() {
           {/* Public routes */}
           <Route path="/"            element={<Landing />} />
           <Route path="/login"       element={<Login />} />
+          <Route path="/register"    element={<Register />} />
           <Route path="/verify-otp"  element={<OTPVerify />} />
           <Route path="/unauthorized" element={<Unauthorized />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password"  element={<ResetPassword />} />
 
           {/* Farmer-only routes */}
           <Route path="/farmer" element={

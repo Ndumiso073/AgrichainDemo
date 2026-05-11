@@ -53,13 +53,8 @@ export default function Landing() {
   }
 
   function enterAs(role) {
-    if (!account) {
-      alert('Please connect your MetaMask wallet first.')
-      return
-    }
-    if (role === 'farmer') navigate('/farmer')
-    if (role === 'buyer') navigate('/buyer')
-    if (role === 'admin') navigate('/admin')
+    // Navigate to login so user can authenticate
+    navigate('/login', { state: { role } })
   }
 
   const roles = [
