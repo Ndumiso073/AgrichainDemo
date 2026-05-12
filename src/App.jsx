@@ -12,6 +12,7 @@ import FarmerDashboard  from './pages/FarmerDashboard'
 import RegisterHarvest  from './pages/RegisterHarvest'
 import QRViewer         from './pages/QRViewer'
 import BuyerScanner     from './pages/BuyerScanner'
+import BuyerOrders      from './pages/BuyerOrders'  // ADD THIS IMPORT
 import VerifyResult     from './pages/VerifyResult'
 import AdminDashboard   from './pages/AdminDashboard'
 import UserManagement   from './pages/UserManagement'
@@ -55,6 +56,14 @@ function App() {
               <BuyerScanner />
             </ProtectedRoute>
           } />
+          
+          {/* ADD THIS: Buyer Orders Route */}
+          <Route path="/buyer-orders" element={
+            <ProtectedRoute allowedRoles={['buyer']}>
+              <BuyerOrders />
+            </ProtectedRoute>
+          } />
+          
           <Route path="/verify-result" element={
             <ProtectedRoute allowedRoles={['buyer', 'admin']}>
               <VerifyResult />
