@@ -17,7 +17,7 @@ import VerifyResult     from './pages/VerifyResult'
 import AdminDashboard   from './pages/AdminDashboard'
 import UserManagement   from './pages/UserManagement'
 import ForgotPassword from './pages/ForgotPassword'
-import ResetPassword  from './pages/ResetPassword'
+import Resetpassword  from './pages/Resetpassword'
 
 function App() {
   return (
@@ -31,7 +31,7 @@ function App() {
           <Route path="/verify-otp"  element={<OTPVerify />} />
           <Route path="/unauthorized" element={<Unauthorized />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
-          <Route path="/reset-password"  element={<ResetPassword />} />
+          <Route path="/reset-password"  element={<Resetpassword />} />
 
           {/* Farmer-only routes */}
           <Route path="/farmer" element={
