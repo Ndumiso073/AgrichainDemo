@@ -7,19 +7,28 @@ const AuthContext = createContext({})
 export function AuthProvider({ children }) {
   const [user, setUser]       = useState(null)
   const [profile, setProfile] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [sessionLoading, setSessionLoading] = useState(true)
+  const [profileLoading, setProfileLoading] = useState(false)
 
   useEffect(() => {
     // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null)
-      setLoading(false)
+      if (!session?.user) {
+        setProfile(null)
+        setProfileLoading(false)
+      }
+      setSessionLoading(false)
     })
 
     // Listen for changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null)
-      setLoading(false)
+      if (!session?.user) {
+        setProfile(null)
+        setProfileLoading(false)
+      }
+      setSessionLoading(false)
     })
 
     return () => subscription.unsubscribe()
@@ -27,17 +36,42 @@ export function AuthProvider({ children }) {
 
   // Fetch profile separately when user changes
   useEffect(() => {
-    if (!user) {
-      setProfile(null)
-      return
-    }
+    let alive = true
+
+    if (!user) return
+
+    const fallbackProfile = (user) => ({
+      id: user.id,
+      full_name: user.user_metadata?.full_name || user.email || '',
+      email: user.email || '',
+      role: user.user_metadata?.role || null,
+    })
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setProfileLoading(true)
     supabase
       .from('profiles')
       .select('*')
       .eq('id', user.id)
-      .single()
-      .then(({ data }) => setProfile(data))
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (!alive) return
+        if (error) {
+          setProfile(fallbackProfile(user))
+          return
+        }
+        setProfile(data ?? fallbackProfile(user))
+      })
+      .finally(() => {
+        if (alive) setProfileLoading(false)
+      })
+
+    return () => {
+      alive = false
+    }
   }, [user])
+
+  const loading = sessionLoading || (Boolean(user) && profileLoading)
 
   async function signIn(email, password) {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
@@ -80,6 +114,7 @@ export function AuthProvider({ children }) {
   )
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth() {
   return useContext(AuthContext)
 }

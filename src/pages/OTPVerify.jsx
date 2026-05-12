@@ -22,19 +22,39 @@ export default function OTPVerify() {
   const [verified, setVerified]   = useState(false)
   const inputRefs = useRef([])
   const redirected = useRef(false)
+  const postVerifyRedirected = useRef(false)
 
   // skipOtp: only redirect once profile is loaded
   useEffect(() => {
     if (!skipOtp) return
     if (loading) return          // still fetching session
-    if (!profile) return         // still fetching profile
     if (redirected.current) return  // already redirected
     redirected.current = true
+    if (!profile) {
+      navigate('/unauthorized', { replace: true })
+      return
+    }
     if (profile.role === 'farmer') navigate('/farmer', { replace: true })
     else if (profile.role === 'buyer') navigate('/buyer', { replace: true })
     else if (profile.role === 'admin') navigate('/admin', { replace: true })
     else navigate('/farmer', { replace: true })
   }, [skipOtp, profile, loading, navigate])
+
+  useEffect(() => {
+    if (!verified) return
+    if (loading) return
+    if (postVerifyRedirected.current) return
+    postVerifyRedirected.current = true
+    if (!profile) {
+      navigate('/unauthorized', { replace: true })
+      return
+    }
+
+    if (profile.role === 'farmer') navigate('/farmer', { replace: true })
+    else if (profile.role === 'buyer') navigate('/buyer', { replace: true })
+    else if (profile.role === 'admin') navigate('/admin', { replace: true })
+    else navigate('/farmer', { replace: true })
+  }, [verified, loading, profile, navigate])
 
   // Countdown timer
   useEffect(() => {
@@ -82,14 +102,7 @@ export default function OTPVerify() {
       })
       if (verifyError) throw verifyError
       setVerified(true)
-      setTimeout(() => {
-        const role = profile?.role
-        if (role === 'farmer') navigate('/farmer', { replace: true })
-        else if (role === 'buyer') navigate('/buyer', { replace: true })
-        else if (role === 'admin') navigate('/admin', { replace: true })
-        else navigate('/farmer', { replace: true })
-      }, 1500)
-    } catch (err) {
+    } catch {
       setError('Invalid or expired code. Please try again.')
       setOtp(['', '', '', '', '', ''])
       inputRefs.current[0]?.focus()
@@ -110,7 +123,7 @@ export default function OTPVerify() {
       setCountdown(60)
       setOtp(['', '', '', '', '', ''])
       inputRefs.current[0]?.focus()
-    } catch (err) {
+    } catch {
       setError('Failed to resend code. Try again.')
     } finally {
       setResending(false)
@@ -118,7 +131,7 @@ export default function OTPVerify() {
   }
 
   // Show loading spinner while waiting for profile on skipOtp
-  if (skipOtp && (loading || !profile)) {
+  if (skipOtp && loading) {
     return (
       <div style={{
         minHeight: '100vh', background: '#040902',
