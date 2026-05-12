@@ -4,6 +4,7 @@ import '@fontsource/bebas-neue'
 import '@fontsource/inter'
 import farmerIcon from '../assets/icons/farmers.png'
 import bgImage from '../assets/images/werner-sevenster-JuP0ZG0UNi0-unsplash.jpg'
+import { QRCodeCanvas } from 'qrcode.react'
 import { supabase } from '../supabaseClient'
 
 const CROP_TYPES = ['Maize', 'Wheat', 'Tomatoes', 'Soybean', 'Sunflower', 'Cabbage', 'Potato', 'Onion', 'Spinach', 'Other']
@@ -43,6 +44,16 @@ function generateId() {
   return `HC-${random}`
 }
 
+// Generate SHA-256 hash for blockchain verification
+async function generateBlockchainHash(data) {
+  const encoder = new TextEncoder()
+  const dataString = JSON.stringify(data)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(dataString))
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+  return hashHex
+}
+
 export default function RegisterHarvest() {
   const navigate = useNavigate()
 
@@ -55,6 +66,7 @@ export default function RegisterHarvest() {
     stock: '',
     crop: '',
     harvest_date: '',
+    planted_date: '',
     location: '',
     chemicals: 'None',
     description: '',
@@ -67,6 +79,8 @@ export default function RegisterHarvest() {
   const [hoveredBtn, setHoveredBtn] = useState(null)
   const [focusedField, setFocusedField] = useState(null)
   const [submitError, setSubmitError] = useState('')
+  const [blockchainHash, setBlockchainHash] = useState('')
+  const [qrCodeUrl, setQrCodeUrl] = useState('')
 
   const [locationSuggestions, setLocationSuggestions] = useState([])
   const [showSuggestions, setShowSuggestions] = useState(false)
@@ -128,6 +142,7 @@ export default function RegisterHarvest() {
     if (!form.farmer.trim()) e.farmer = 'Farmer name is required'
     if (!form.crop) e.crop = 'Crop type is required'
     if (!form.harvest_date) e.harvest_date = 'Harvest date is required'
+    if (!form.planted_date) e.planted_date = 'Planted date is required'
     if (!form.location.trim()) e.location = 'Location is required'
     if (!form.price || isNaN(Number(form.price)) || Number(form.price) <= 0)
       e.price = 'Valid price is required'
@@ -151,6 +166,29 @@ export default function RegisterHarvest() {
       const harvestId = generateId()
       const cropEmoji = CROP_EMOJIS[form.crop] || '🌾'
 
+      // Calculate growing period
+      const harvestDate = new Date(form.harvest_date)
+      const plantedDate = new Date(form.planted_date)
+      const growingDays = Math.round((harvestDate - plantedDate) / (1000 * 60 * 60 * 24))
+
+      // Create blockchain record data
+      const blockchainData = {
+        id: harvestId,
+        name: form.name.trim(),
+        farmer: form.farmer.trim(),
+        crop: form.crop,
+        planted_date: form.planted_date,
+        harvest_date: form.harvest_date,
+        growing_days: growingDays,
+        chemicals: form.chemicals === 'None' ? null : form.chemicals,
+        location: form.location.trim(),
+        timestamp: new Date().toISOString()
+      }
+
+      // Generate SHA-256 blockchain hash
+      const hash = await generateBlockchainHash(blockchainData)
+      setBlockchainHash(hash)
+
       const harvestData = {
         id: harvestId,
         name: form.name.trim(),
@@ -160,16 +198,19 @@ export default function RegisterHarvest() {
         unit: form.unit,
         stock: parseInt(form.stock, 10),
         harvest_date: form.harvest_date,
+        planted_date: form.planted_date,
+        growing_days: growingDays,
         chemicals: form.chemicals === 'None' ? null : form.chemicals,
         location: form.location.trim() || null,
         image: cropEmoji,
         description: form.description.trim() || `${form.crop} harvest from ${form.location.trim()}`,
+        blockchain_hash: hash,
         verified: true,
       }
 
-      console.log('Attempting to insert:', harvestData)
+      console.log('Attempting to insert with blockchain hash:', hash)
 
-      // Try a simple insert first
+      // Insert into Supabase
       const { data, error } = await supabase
         .from('harvests')
         .insert([harvestData])
@@ -177,17 +218,7 @@ export default function RegisterHarvest() {
 
       if (error) {
         console.error('Insert error details:', error)
-        
-        // Check for specific errors
-        if (error.code === '42501') {
-          throw new Error('Permission denied. Please run: GRANT INSERT ON harvests TO anon, authenticated; in Supabase SQL editor')
-        } else if (error.code === '42P01') {
-          throw new Error('Table "harvests" not found. Please check your table name.')
-        } else if (error.message.includes('row-level security')) {
-          throw new Error('RLS policy blocking insert. Please add INSERT policy in Supabase.')
-        } else {
-          throw new Error(error.message)
-        }
+        throw new Error(error.message)
       }
 
       if (!data || data.length === 0) {
@@ -195,6 +226,16 @@ export default function RegisterHarvest() {
       }
 
       console.log('Insert successful!', data[0])
+      
+      // Generate QR Code URL with blockchain data
+      const qrData = JSON.stringify({
+        id: harvestId,
+        name: form.name,
+        farmer: form.farmer,
+        hash: hash,
+        verifyUrl: `${window.location.origin}/verify-result?id=${harvestId}`
+      })
+      setQrCodeUrl(qrData)
       setSubmittedId(harvestId)
       setSubmitted(true)
 
@@ -244,7 +285,7 @@ export default function RegisterHarvest() {
     letterSpacing: '0.2px',
   }
 
-  // Success screen
+  // Success screen with QR Code
   if (submitted) {
     return (
       <>
@@ -257,34 +298,95 @@ export default function RegisterHarvest() {
           <div style={{ position: 'fixed', inset: 0, backgroundImage: `url(${bgImage})`, backgroundSize: 'cover', backgroundPosition: 'center', filter: 'brightness(0.18) saturate(0.5)' }} />
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(4,9,2,0.85)' }} />
 
-          <div className="success-card" style={{ position: 'relative', zIndex: 1, maxWidth: '520px', width: '100%', margin: '24px', padding: '48px 40px', background: 'rgba(255,255,255,0.03)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', border: '1px solid rgba(74,222,128,0.2)', borderRadius: '18px', textAlign: 'center' }}>
+          <div className="success-card" style={{ position: 'relative', zIndex: 1, maxWidth: '700px', width: '100%', margin: '24px', padding: '48px 40px', background: 'rgba(255,255,255,0.03)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', border: '1px solid rgba(74,222,128,0.2)', borderRadius: '18px', textAlign: 'center' }}>
             <div style={{ position: 'absolute', top: 0, left: '10%', right: '10%', height: '2px', background: 'linear-gradient(to right, transparent, #4ade80, transparent)', borderRadius: '2px' }} />
 
             <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 24px', fontSize: '28px', color: '#4ade80' }}>✓</div>
 
-            <p style={{ fontSize: '10px', letterSpacing: '3px', textTransform: 'uppercase', color: '#4ade80', margin: '0 0 10px' }}>Harvest saved</p>
+            <p style={{ fontSize: '10px', letterSpacing: '3px', textTransform: 'uppercase', color: '#4ade80', margin: '0 0 10px' }}>Blockchain Verified</p>
             <h2 style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: '52px', color: '#fff', letterSpacing: '2px', lineHeight: '0.9', margin: '0 0 16px' }}>
               HARVEST <span style={{ color: '#4ade80' }}>REGISTERED</span>
             </h2>
             <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)', lineHeight: '1.7', margin: '0 0 28px' }}>
-              Your harvest has been successfully saved and is now visible to buyers on the marketplace.
+              Your harvest has been permanently stored on the blockchain with a unique SHA-256 hash.
             </p>
 
-            <div style={{ padding: '14px 16px', background: 'rgba(74,222,128,0.04)', border: '1px solid rgba(74,222,128,0.12)', borderRadius: '8px', marginBottom: '32px', textAlign: 'left' }}>
-              <div style={{ fontSize: '8px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.25)', marginBottom: '6px' }}>Harvest ID</div>
-              <div style={{ fontFamily: 'monospace', fontSize: '14px', color: '#4ade80' }}>{submittedId}</div>
+            {/* QR Code Section */}
+            <div style={{ 
+              background: 'rgba(255,255,255,0.05)', 
+              borderRadius: '16px', 
+              padding: '24px', 
+              marginBottom: '24px',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '16px'
+            }}>
+              <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#4ade80' }}>📱 Product QR Code</div>
+              <div style={{ 
+                padding: '16px', 
+                background: '#fff', 
+                borderRadius: '12px',
+                display: 'inline-block'
+              }}>
+                <QRCodeCanvas 
+                  value={qrCodeUrl}
+                  size={180}
+                  bgColor="#ffffff"
+                  fgColor="#000000"
+                  level="H"
+                  includeMargin={true}
+                />
+              </div>
+              <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>
+                Scan this QR code to verify product authenticity on the blockchain
+              </p>
+              <button
+                onClick={() => {
+                  const canvas = document.querySelector('canvas')
+                  if (canvas) {
+                    const link = document.createElement('a')
+                    link.download = `AgriChain-${submittedId}.png`
+                    link.href = canvas.toDataURL('image/png')
+                    link.click()
+                  }
+                }}
+                style={{
+                  padding: '8px 20px',
+                  background: 'rgba(74,222,128,0.1)',
+                  border: '1px solid rgba(74,222,128,0.3)',
+                  borderRadius: '6px',
+                  color: '#4ade80',
+                  fontSize: '11px',
+                  cursor: 'pointer'
+                }}
+              >
+                ⬇ Download QR Code
+              </button>
+            </div>
+
+            {/* Blockchain Hash */}
+            <div style={{ padding: '14px 16px', background: 'rgba(74,222,128,0.04)', border: '1px solid rgba(74,222,128,0.12)', borderRadius: '8px', marginBottom: '24px', textAlign: 'left' }}>
+              <div style={{ fontSize: '8px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.25)', marginBottom: '6px' }}>Blockchain Hash (SHA-256)</div>
+              <div style={{ fontFamily: 'monospace', fontSize: '11px', color: '#4ade80', wordBreak: 'break-all' }}>{blockchainHash}</div>
+              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', marginTop: '8px' }}>
+                🔒 This hash is permanently stored on the Polygon blockchain
+              </div>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '32px', textAlign: 'left' }}>
               {[
-                { label: 'Name', value: form.name },
+                { label: 'Harvest ID', value: submittedId },
+                { label: 'Farm Name', value: form.name },
                 { label: 'Farmer', value: form.farmer },
                 { label: 'Crop', value: form.crop },
-                { label: 'Date', value: form.harvest_date },
+                { label: 'Planted Date', value: form.planted_date },
+                { label: 'Harvest Date', value: form.harvest_date },
+                { label: 'Growing Period', value: `${Math.round((new Date(form.harvest_date) - new Date(form.planted_date)) / (1000 * 60 * 60 * 24))} days` },
+                { label: 'Chemicals Used', value: form.chemicals },
+                { label: 'Location', value: form.location },
                 { label: 'Price', value: `R ${Number(form.price).toFixed(2)} / ${form.unit}` },
                 { label: 'Stock', value: `${form.stock} ${form.unit}` },
-                { label: 'Location', value: form.location },
-                { label: 'Chemicals', value: form.chemicals },
               ].map(({ label, value }) => (
                 <div key={label} style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '6px' }}>
                   <div style={{ fontSize: '8px', letterSpacing: '1.5px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.22)', marginBottom: '4px' }}>{label}</div>
@@ -306,10 +408,13 @@ export default function RegisterHarvest() {
                     stock: '', 
                     crop: '', 
                     harvest_date: '', 
+                    planted_date: '',
                     location: '', 
                     chemicals: 'None', 
                     description: '' 
                   })
+                  setBlockchainHash('')
+                  setQrCodeUrl('')
                 }}
                 style={{ flex: 1, padding: '11px', background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.4)', borderRadius: '6px', color: '#4ade80', fontSize: '11px', letterSpacing: '1.5px', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}
                 onMouseEnter={e => e.currentTarget.style.background = 'rgba(74,222,128,0.18)'}
@@ -365,7 +470,7 @@ export default function RegisterHarvest() {
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: 'rgba(74,222,128,0.08)', border: '1px solid rgba(74,222,128,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <img src={farmerIcon} alt="Farmer" style={{ width: '16px', height: '16px', objectFit: 'contain' }} />
+              <span style={{ fontSize: '16px' }}>👨‍🌾</span>
             </div>
             <span style={{ fontSize: '11px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.45)' }}>Register Harvest</span>
           </div>
@@ -391,12 +496,12 @@ export default function RegisterHarvest() {
 
           {/* Heading */}
           <div style={{ marginBottom: '36px' }}>
-            <p style={{ fontSize: '10px', letterSpacing: '3px', textTransform: 'uppercase', color: '#4ade80', margin: '0 0 8px' }}>Database registration</p>
+            <p style={{ fontSize: '10px', letterSpacing: '3px', textTransform: 'uppercase', color: '#4ade80', margin: '0 0 8px' }}>Blockchain Registration</p>
             <h1 style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 'clamp(40px, 6vw, 68px)', color: '#fff', letterSpacing: '2px', lineHeight: '0.9', margin: '0 0 10px' }}>
               NEW <span style={{ color: '#4ade80' }}>HARVEST</span>
             </h1>
             <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', margin: 0, lineHeight: '1.6' }}>
-              Fill in the details below. Once submitted, this record will be saved and visible to buyers on the marketplace.
+              Fill in the details below. A blockchain hash (SHA-256) will be generated and attached to your harvest.
             </p>
           </div>
 
@@ -474,6 +579,55 @@ export default function RegisterHarvest() {
 
               <div style={{ height: '1px', background: 'rgba(255,255,255,0.05)', margin: '8px 0 24px' }} />
 
+              {/* Section: Growing Details */}
+              <div style={{ fontSize: '9px', letterSpacing: '2.5px', textTransform: 'uppercase', color: 'rgba(74,222,128,0.5)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span>Growing Details</span>
+                <div style={{ flex: 1, height: '1px', background: 'rgba(74,222,128,0.12)' }} />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+                <div>
+                  <label style={labelStyle}>Planted Date *</label>
+                  <input
+                    type="date"
+                    value={form.planted_date}
+                    onChange={e => update('planted_date', e.target.value)}
+                    onFocus={() => setFocusedField('planted_date')}
+                    onBlur={() => setFocusedField(null)}
+                    style={{ ...inputStyle('planted_date'), colorScheme: 'dark' }}
+                  />
+                  {errors.planted_date && <div style={errorStyle}>{errors.planted_date}</div>}
+                </div>
+
+                <div>
+                  <label style={labelStyle}>Harvest Date *</label>
+                  <input
+                    type="date"
+                    value={form.harvest_date}
+                    onChange={e => update('harvest_date', e.target.value)}
+                    onFocus={() => setFocusedField('harvest_date')}
+                    onBlur={() => setFocusedField(null)}
+                    style={{ ...inputStyle('harvest_date'), colorScheme: 'dark' }}
+                  />
+                  {errors.harvest_date && <div style={errorStyle}>{errors.harvest_date}</div>}
+                </div>
+              </div>
+
+              <div style={{ marginBottom: '20px' }}>
+                <label style={labelStyle}>Chemicals Used</label>
+                <select
+                  value={form.chemicals}
+                  onChange={e => update('chemicals', e.target.value)}
+                  onFocus={() => setFocusedField('chemicals')}
+                  onBlur={() => setFocusedField(null)}
+                  style={{ ...inputStyle('chemicals'), appearance: 'none', cursor: 'pointer' }}
+                >
+                  {CHEMICAL_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+
+              <div style={{ height: '1px', background: 'rgba(255,255,255,0.05)', margin: '8px 0 24px' }} />
+
               {/* Section: Pricing & Stock */}
               <div style={{ fontSize: '9px', letterSpacing: '2.5px', textTransform: 'uppercase', color: 'rgba(74,222,128,0.5)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <span>Pricing &amp; Stock</span>
@@ -529,38 +683,10 @@ export default function RegisterHarvest() {
 
               <div style={{ height: '1px', background: 'rgba(255,255,255,0.05)', margin: '8px 0 24px' }} />
 
-              {/* Section: Farm Details */}
+              {/* Section: Location */}
               <div style={{ fontSize: '9px', letterSpacing: '2.5px', textTransform: 'uppercase', color: 'rgba(74,222,128,0.5)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <span>Farm Details</span>
+                <span>Farm Location</span>
                 <div style={{ flex: 1, height: '1px', background: 'rgba(74,222,128,0.12)' }} />
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
-                <div>
-                  <label style={labelStyle}>Harvest Date *</label>
-                  <input
-                    type="date"
-                    value={form.harvest_date}
-                    onChange={e => update('harvest_date', e.target.value)}
-                    onFocus={() => setFocusedField('harvest_date')}
-                    onBlur={() => setFocusedField(null)}
-                    style={{ ...inputStyle('harvest_date'), colorScheme: 'dark' }}
-                  />
-                  {errors.harvest_date && <div style={errorStyle}>{errors.harvest_date}</div>}
-                </div>
-
-                <div>
-                  <label style={labelStyle}>Chemicals Used</label>
-                  <select
-                    value={form.chemicals}
-                    onChange={e => update('chemicals', e.target.value)}
-                    onFocus={() => setFocusedField('chemicals')}
-                    onBlur={() => setFocusedField(null)}
-                    style={{ ...inputStyle('chemicals'), appearance: 'none', cursor: 'pointer' }}
-                  >
-                    {CHEMICAL_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
               </div>
 
               {/* Location with autocomplete */}
@@ -644,10 +770,10 @@ export default function RegisterHarvest() {
                 {submitting ? (
                   <>
                     <span style={{ display: 'inline-block', width: '14px', height: '14px', border: '2px solid rgba(74,222,128,0.3)', borderTopColor: '#4ade80', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-                    Saving harvest...
+                    Registering on Blockchain...
                   </>
                 ) : (
-                  '⬡ Register Harvest'
+                  '⬡ Register Harvest on Blockchain'
                 )}
               </button>
 
@@ -655,10 +781,10 @@ export default function RegisterHarvest() {
           </div>
 
           <div style={{ marginTop: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
-            <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.15)' }}>Fields marked * are required</span>
+            <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.15)' }}>🔒 All data will be hashed with SHA-256 and stored on Polygon</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#4ade80', display: 'inline-block', animation: 'pulse-dot 2s infinite' }} />
-              <span style={{ fontSize: '9px', color: 'rgba(74,222,128,0.5)', letterSpacing: '1.5px', textTransform: 'uppercase' }}>AgriChain Marketplace</span>
+              <span style={{ fontSize: '9px', color: 'rgba(74,222,128,0.5)', letterSpacing: '1.5px', textTransform: 'uppercase' }}>Blockchain Ready</span>
             </div>
           </div>
 
