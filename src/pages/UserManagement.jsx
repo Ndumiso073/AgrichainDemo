@@ -1,23 +1,12 @@
 import { useNavigate } from 'react-router-dom'
-import { useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import '@fontsource/bebas-neue'
 import '@fontsource/inter'
 import adminIcon from '../assets/icons/admin.png'
 import farmerIcon from '../assets/icons/farmers.png'
 import buyerIcon from '../assets/icons/user.png'
 import bgImage from '../assets/images/stijn-te-strake-UdhpcfImQ9Y-unsplash.jpg'
-
-// ── Mock users ─────────────────────────────────────────────────────────────
-const INITIAL_USERS = [
-  { id: 1, wallet: '0x4f3a8b2c9d1e6f7a3b4c5d2e8f9a1b0c',  role: 'Farmer', name: 'Sipho Dlamini',   harvests: 12, joined: '2025-01-14', active: true  },
-  { id: 2, wallet: '0x8b2ca14f3d9e6f7b4c5d2e8f9a1b0c3d',  role: 'Farmer', name: 'Ayanda Nkosi',    harvests: 8,  joined: '2025-02-03', active: true  },
-  { id: 3, wallet: '0x3e9dc72b1a4f8b2c5d6e9f0a3b7c4d1e',  role: 'Farmer', name: 'Thabo Mokoena',   harvests: 6,  joined: '2025-02-18', active: false },
-  { id: 4, wallet: '0xBuyerf10a2b3c4d5e6f7a8b9c0d1e2f3a',  role: 'Buyer',  name: 'Nomsa Khumalo',   harvests: 0,  joined: '2025-03-01', active: true  },
-  { id: 5, wallet: '0xBuyerc3d12b4c5d6e7f8a9b0c1d2e3f4a',  role: 'Buyer',  name: 'Lungelo Zulu',    harvests: 0,  joined: '2025-03-12', active: true  },
-  { id: 6, wallet: '0xBuyera7b23c4d5e6f7a8b9c0d1e2f3a4b',  role: 'Buyer',  name: 'Precious Cele',   harvests: 0,  joined: '2025-03-22', active: false },
-  { id: 7, wallet: '0xAdmin9f2e1b3c4d5e6f7a8b9c0d1e2f3a4',  role: 'Admin',  name: 'System Admin',    harvests: 0,  joined: '2025-01-01', active: true  },
-  { id: 8, wallet: '0x1c4d7e2f5a8b3c6d9e0f1a4b7c2d5e8f',  role: 'Farmer', name: 'Bongani Mthembu', harvests: 3,  joined: '2025-04-05', active: true  },
-]
+import { supabase } from '../supabaseClient'
 
 const ROLE_CFG = {
   Farmer: { color: '#4ade80', rgb: '74,222,128',  icon: farmerIcon },
@@ -27,50 +16,120 @@ const ROLE_CFG = {
 
 export default function UserManagement() {
   const navigate = useNavigate()
-  const [users, setUsers]           = useState(INITIAL_USERS)
+  const [users, setUsers]           = useState([])
+  const [loading, setLoading]       = useState(true)
+  const [error, setError]           = useState('')
   const [filter, setFilter]         = useState('All')
   const [search, setSearch]         = useState('')
-  const [hoveredRow, setHoveredRow] = useState(null)
-  const [hoveredBtn, setHoveredBtn] = useState(null)
   const [editingRole, setEditingRole] = useState(null)
   const [focused, setFocused]       = useState(false)
   const [toast, setToast]           = useState(null)
 
-  const account = '0xAdmin...9f2e'
+  const account = 'ADMIN'
+
+  const fetchUsers = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const [{ data: profiles, error: pErr }, { data: harvests, error: hErr }] = await Promise.all([
+        supabase.from('profiles').select('*').order('created_at', { ascending: false }),
+        supabase.from('harvests').select('id,farmer_wallet'),
+      ])
+      if (pErr) throw pErr
+      if (hErr) throw hErr
+
+      const harvestMap = (harvests || []).reduce((acc, h) => {
+        if (!h.farmer_wallet) return acc
+        acc[h.farmer_wallet] = (acc[h.farmer_wallet] || 0) + 1
+        return acc
+      }, {})
+
+      const formatted = (profiles || []).map((p) => ({
+        id: p.id,
+        wallet: p.wallet_address || 'Not linked',
+        role: p.role ? `${p.role[0].toUpperCase()}${p.role.slice(1)}` : 'Buyer',
+        name: p.full_name || 'Unnamed User',
+        harvests: harvestMap[p.wallet_address] || 0,
+        joined: p.created_at ? new Date(p.created_at).toISOString().slice(0, 10) : '—',
+        active: p.is_active !== false,
+      }))
+      setUsers(formatted)
+    } catch (err) {
+      setError(err.message || 'Failed to load users')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchUsers()
+  }, [fetchUsers])
 
   function showToast(msg, color = '#4ade80') {
     setToast({ msg, color })
     setTimeout(() => setToast(null), 2500)
   }
 
-  function toggleAccess(id) {
-    setUsers(prev => prev.map(u => {
-      if (u.id !== id) return u
-      const next = { ...u, active: !u.active }
-      showToast(`${next.active ? 'Enabled' : 'Disabled'} access for ${next.name}`, next.active ? '#4ade80' : '#f87171')
-      return next
-    }))
+  async function toggleAccess(id) {
+    const target = users.find(u => u.id === id)
+    if (!target) return
+    const nextActive = !target.active
+    const { error: updateError } = await supabase
+      .from('profiles')
+      .update({ is_active: nextActive })
+      .eq('id', id)
+    if (updateError) {
+      showToast(updateError.message || 'Failed to update status', '#f87171')
+      return
+    }
+    setUsers(prev => prev.map(u => (u.id === id ? { ...u, active: nextActive } : u)))
+    showToast(`${nextActive ? 'Enabled' : 'Disabled'} access for ${target.name}`, nextActive ? '#4ade80' : '#f87171')
   }
 
-  function changeRole(id, role) {
-    setUsers(prev => prev.map(u => {
-      if (u.id !== id) return u
-      showToast(`Role changed to ${role} for ${u.name}`, ROLE_CFG[role].color)
-      return { ...u, role }
-    }))
+  async function changeRole(id, role) {
+    const target = users.find(u => u.id === id)
+    if (!target) return
+    const dbRole = role.toLowerCase()
+    const { error: updateError } = await supabase
+      .from('profiles')
+      .update({ role: dbRole })
+      .eq('id', id)
+    if (updateError) {
+      showToast(updateError.message || 'Failed to update role', '#f87171')
+      return
+    }
+    setUsers(prev => prev.map(u => (u.id === id ? { ...u, role } : u)))
+    showToast(`Role changed to ${role} for ${target.name}`, ROLE_CFG[role].color)
     setEditingRole(null)
   }
 
-  const filtered = users.filter(u => {
+  const filtered = useMemo(() => users.filter(u => {
     const matchRole   = filter === 'All' || u.role === filter
-    const matchSearch = search === '' || u.name.toLowerCase().includes(search.toLowerCase()) || u.wallet.toLowerCase().includes(search.toLowerCase())
+    const q = search.toLowerCase()
+    const matchSearch = search === '' || u.name.toLowerCase().includes(q) || u.wallet.toLowerCase().includes(q)
     return matchRole && matchSearch
-  })
+  }), [users, filter, search])
 
   const totalFarmers = users.filter(u => u.role === 'Farmer').length
   const totalBuyers  = users.filter(u => u.role === 'Buyer').length
-  const totalAdmins  = users.filter(u => u.role === 'Admin').length
   const totalActive  = users.filter(u => u.active).length
+
+  if (loading) {
+    return (
+      <div style={{ minHeight: '100vh', background: '#040902', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#facc15', fontFamily: "'Inter', sans-serif" }}>
+        Loading user management...
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div style={{ minHeight: '100vh', background: '#040902', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f87171', fontFamily: "'Inter', sans-serif" }}>
+        {error}
+      </div>
+    )
+  }
 
   return (
     <>
@@ -219,8 +278,7 @@ export default function UserManagement() {
             ) : filtered.map((u, i) => {
               const rc = ROLE_CFG[u.role]
               return (
-                <div key={u.id} className="table-row" style={{ display: 'grid', gridTemplateColumns: '180px 1fr 80px 100px 90px 90px 90px', padding: '13px 20px', borderBottom: i < filtered.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none', alignItems: 'center' }}
-                  onMouseEnter={() => setHoveredRow(u.id)} onMouseLeave={() => setHoveredRow(null)}>
+                <div key={u.id} className="table-row" style={{ display: 'grid', gridTemplateColumns: '180px 1fr 80px 100px 90px 90px 90px', padding: '13px 20px', borderBottom: i < filtered.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none', alignItems: 'center' }}>
 
                   {/* Name + icon */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

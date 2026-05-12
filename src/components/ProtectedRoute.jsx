@@ -43,8 +43,13 @@ export default function ProtectedRoute({ children, allowedRoles }) {
     return <Navigate to="/login" replace />
   }
 
+  // Authenticated but profile is missing
+  if (user && !profile) {
+    return <Navigate to="/unauthorized" replace />
+  }
+
   // Authenticated but role not allowed
-  if (allowedRoles && profile && !allowedRoles.includes(profile.role)) {
+  if (allowedRoles && !allowedRoles.includes(profile.role)) {
     return <Navigate to="/unauthorized" replace />
   }
 
