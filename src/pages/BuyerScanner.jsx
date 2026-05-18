@@ -8,7 +8,7 @@ import bgImage from '../assets/images/max-O_TVsaeZNlE-unsplash.jpg'
 // Mock harvest IDs for quick-scan demo buttons
 const DEMO_IDS = ['HC-0012', 'HC-0011', 'HC-0010', 'HC-0009', 'HC-0008']
 
-export default function BuyerScanner() {
+export default function FarmerDashboard() {
   const navigate = useNavigate()
   const [manualId, setManualId]     = useState('')
   const [error, setError]           = useState('')
@@ -78,14 +78,42 @@ export default function BuyerScanner() {
         .scan-border { animation: borderPulse 2s ease-in-out infinite; }
       `}</style>
 
-      <div className="buyer-page" style={{
+      <div className="dash-page" style={{
         fontFamily: "'Inter', sans-serif",
-        minHeight: '100vh', background: '#060c04',
-        position: 'relative', overflow: 'hidden',
+        minHeight: '100vh',
+        background: '#060c04',
+        position: 'relative',
+        overflow: 'hidden',
       }}>
         {/* Background */}
-        <div style={{ position: 'fixed', inset: 0, zIndex: 0, backgroundImage: `url(${bgImage})`, backgroundSize: 'cover', backgroundPosition: 'center', filter: 'brightness(0.18) saturate(0.5)' }} />
-        <div style={{ position: 'fixed', inset: 0, zIndex: 0, background: 'linear-gradient(135deg, rgba(4,9,2,0.94) 0%, rgba(6,12,4,0.82) 100%)' }} />
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 0,
+          backgroundImage: `url(${bgImage})`,
+          backgroundSize: 'cover', backgroundPosition: 'center',
+          filter: 'brightness(0.22) saturate(0.6)',
+        }} />
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 0,
+          background: 'linear-gradient(135deg, rgba(4,9,2,0.92) 0%, rgba(6,12,4,0.80) 100%)',
+        }} />
+
+        {/* Notification Toast */}
+        {notificationMessage && (
+          <div style={{
+            position: 'fixed',
+            top: '20px',
+            right: '20px',
+            background: '#4ade80',
+            color: '#060c04',
+            padding: '12px 20px',
+            borderRadius: '8px',
+            zIndex: 1001,
+            animation: 'slideIn 0.3s ease',
+            fontWeight: 'bold'
+          }}>
+            {notificationMessage}
+          </div>
+        )}
 
         {/* Navbar */}
         <nav style={{
@@ -98,7 +126,8 @@ export default function BuyerScanner() {
         }}>
           <div onClick={() => navigate('/')} style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column', lineHeight: 1 }}>
             <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: '20px', letterSpacing: '3px' }}>
-              <span style={{ color: '#4ade80' }}>AGRI</span><span style={{ color: '#fff' }}>CHAIN</span>
+              <span style={{ color: '#4ade80' }}>AGRI</span>
+              <span style={{ color: '#fff' }}>CHAIN</span>
             </span>
             <span style={{ fontSize: '7px', color: 'rgba(255,255,255,0.25)', letterSpacing: '2px', textTransform: 'uppercase' }}>Blockchain Verified</span>
           </div>
