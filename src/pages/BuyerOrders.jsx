@@ -14,7 +14,7 @@ export default function BuyerOrders() {
   const [showPaymentModal, setShowPaymentModal] = useState(false)
   const [verificationResult, setVerificationResult] = useState(null)
   const [processingPayment, setProcessingPayment] = useState(false)
-  const [hoveredOrder, setHoveredOrder] = useState(null)
+  const [hoveredRow, setHoveredRow] = useState(null)
   const [showManualEntry, setShowManualEntry] = useState(false)
   const [manualHarvestId, setManualHarvestId] = useState('')
   const [cameraActive, setCameraActive] = useState(false)
@@ -28,17 +28,13 @@ export default function BuyerOrders() {
 
   const account = '0xBuyer...f10a'
 
-  // Load orders from Supabase database
+  // Load orders
   useEffect(() => {
     loadOrders()
+    
     return () => {
-      // Cleanup on unmount
-      if (streamRef.current) {
-        stopCamera()
-      }
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current)
-      }
+      if (streamRef.current) stopCamera()
+      if (animationRef.current) cancelAnimationFrame(animationRef.current)
     }
   }, [])
 
@@ -66,10 +62,13 @@ export default function BuyerOrders() {
         total: order.total,
         status: order.status,
         trackingNumber: order.tracking_number,
-        paymentDate: order.payment_date
+        paymentDate: order.payment_date,
+        deliveryDate: order.delivery_date,
+        approvedAt: order.approved_at
       }))
       
       setOrders(transformedOrders)
+      
     } catch (error) {
       console.error('Error loading orders:', error)
       setOrders([])
@@ -105,7 +104,6 @@ export default function BuyerOrders() {
         videoRef.current.srcObject = stream
         videoRef.current.play()
         
-        // Start scanning after video is playing
         videoRef.current.onloadedmetadata = () => {
           scanQRCode()
         }
@@ -133,82 +131,70 @@ export default function BuyerOrders() {
   }
 
   // Scan QR code from video frames
-  // Scan QR code from video frames
-async function scanQRCode() {
-  if (!videoRef.current || !canvasRef.current) {
-    if (animationRef.current) {
-      cancelAnimationFrame(animationRef.current)
-      animationRef.current = null
-    }
-    return
-  }
-  
-  const video = videoRef.current
-  const canvas = canvasRef.current
-  const context = canvas.getContext('2d')
-  
-  if (video.readyState === video.HAVE_ENOUGH_DATA) {
-    // Set canvas size to match video
-    canvas.width = video.videoWidth
-    canvas.height = video.videoHeight
-    
-    // Draw video frame to canvas
-    context.drawImage(video, 0, 0, canvas.width, canvas.height)
-    
-    // Get image data
-    const imageData = context.getImageData(0, 0, canvas.width, canvas.height)
-    
-    // Try to decode QR code (scan multiple times per frame for better detection)
-    const code = jsQR(imageData.data, imageData.width, imageData.height, {
-      inversionAttempts: "attemptBoth",
-    })
-    
-    if (code && verificationResult === null) {
-      console.log("QR Code detected:", code.data)
-      
-      // Stop scanning immediately
-      setScanMessage("QR code detected! Verifying...")
-      
-      // Extract Harvest ID from QR code
-      let harvestId = code.data.trim().toUpperCase()
-      
-      // Try to extract ID if it's a URL or contains HC-
-      const idMatch = harvestId.match(/HC-[A-Z0-9]{4,8}/i)
-      if (idMatch) {
-        harvestId = idMatch[0].toUpperCase()
+  async function scanQRCode() {
+    if (!videoRef.current || !canvasRef.current) {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current)
+        animationRef.current = null
       }
-      
-      // Check if it looks like a valid Harvest ID
-      const isValidHarvestId = /^HC-[A-Z0-9]{4,8}$/i.test(harvestId)
-      
-      if (!isValidHarvestId) {
-        setVerificationResult({
-          success: false,
-          type: 'invalid_qr',
-          message: `❌ Invalid QR Code\n\nThis QR code is not a valid AgriChain Harvest ID.\n\nPlease scan a product QR code from an AgriChain registered product.`,
-          qrContent: code.data
-        })
-        setScanMessage("Invalid QR code detected")
-        stopCamera()
-        return
-      }
-      
-      // Verify the scanned ID against the order
-      await verifyScannedQr(harvestId)
       return
-    } else if (scanning) {
-      setScanMessage("Scanning... Position QR code in frame")
     }
+    
+    const video = videoRef.current
+    const canvas = canvasRef.current
+    const context = canvas.getContext('2d')
+    
+    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+      canvas.width = video.videoWidth
+      canvas.height = video.videoHeight
+      
+      context.drawImage(video, 0, 0, canvas.width, canvas.height)
+      
+      const imageData = context.getImageData(0, 0, canvas.width, canvas.height)
+      
+      const code = jsQR(imageData.data, imageData.width, imageData.height, {
+        inversionAttempts: "attemptBoth",
+      })
+      
+      if (code && verificationResult === null) {
+        console.log("QR Code detected:", code.data)
+        
+        setScanMessage("QR code detected! Verifying...")
+        
+        let harvestId = code.data.trim().toUpperCase()
+        
+        const idMatch = harvestId.match(/HC-[A-Z0-9]{4,8}/i)
+        if (idMatch) {
+          harvestId = idMatch[0].toUpperCase()
+        }
+        
+        const isValidHarvestId = /^HC-[A-Z0-9]{4,8}$/i.test(harvestId)
+        
+        if (!isValidHarvestId) {
+          setVerificationResult({
+            success: false,
+            type: 'invalid_qr',
+            message: `❌ Invalid QR Code\n\nThis QR code is not a valid AgriChain Harvest ID.\n\nPlease scan a product QR code from an AgriChain registered product.`,
+            qrContent: code.data
+          })
+          setScanMessage("Invalid QR code detected")
+          stopCamera()
+          return
+        }
+        
+        await verifyScannedQr(harvestId)
+        return
+      } else if (scanning) {
+        setScanMessage("Scanning... Position QR code in frame")
+      }
+    }
+    
+    animationRef.current = requestAnimationFrame(() => scanQRCode())
   }
-  
-  // Continue scanning
-  animationRef.current = requestAnimationFrame(() => scanQRCode())
-}
 
   // Verify scanned QR code against the order
   async function verifyScannedQr(harvestId) {
     try {
-      // Check if this Harvest ID matches ANY product in the order
       const matchingProduct = selectedOrder?.items.find(item => item.id === harvestId)
       
       if (!matchingProduct) {
@@ -222,7 +208,6 @@ async function scanQRCode() {
         return
       }
       
-      // Check if this harvest has been scanned before (fraud detection)
       const existingScans = JSON.parse(localStorage.getItem('harvest_scans') || '[]')
       const hasBeenScanned = existingScans.some(
         scan => scan.harvest_id === harvestId && scan.order_id === selectedOrder.id
@@ -239,7 +224,6 @@ async function scanQRCode() {
         return
       }
       
-      // Fetch full product details from database
       const { data: productData, error: productError } = await supabase
         .from('harvests')
         .select('*')
@@ -257,7 +241,6 @@ async function scanQRCode() {
         return
       }
       
-      // Check if product is out of stock
       if (productData.stock <= 0) {
         setVerificationResult({
           success: false,
@@ -270,7 +253,6 @@ async function scanQRCode() {
         return
       }
       
-      // Success - product is valid
       setVerificationResult({
         success: true,
         type: 'success',
@@ -311,7 +293,6 @@ async function scanQRCode() {
     setProcessingPayment(true)
     
     try {
-      // Record that this QR has been scanned (prevent reuse)
       const existingScans = JSON.parse(localStorage.getItem('harvest_scans') || '[]')
       existingScans.push({
         harvest_id: verificationResult.harvestId,
@@ -322,7 +303,6 @@ async function scanQRCode() {
       })
       localStorage.setItem('harvest_scans', JSON.stringify(existingScans))
       
-      // Update stock in database for all items in order
       for (const item of selectedOrder.items) {
         const { data: productData } = await supabase
           .from('harvests')
@@ -340,7 +320,6 @@ async function scanQRCode() {
         }
       }
       
-      // Update order status in Supabase
       const { error: updateError } = await supabase
         .from('orders')
         .update({ 
@@ -356,10 +335,8 @@ async function scanQRCode() {
         console.log('✅ Order status updated to Paid in Supabase')
       }
       
-      // Reload orders to refresh the list
       await loadOrders()
       
-      // Close modal and show success
       setShowPaymentModal(false)
       setSelectedOrder(null)
       setVerificationResult(null)
@@ -417,18 +394,42 @@ async function scanQRCode() {
     setScanMessage('Position QR code in the frame')
   }
 
+  // Get status color and text
+  function getStatusInfo(status, deliveryDate) {
+    switch(status) {
+      case 'Paid':
+        return { color: '#4ade80', text: '✓ Payment Completed', bg: 'rgba(74,222,128,0.2)' }
+      case 'Approved':
+        return { color: '#4ade80', text: '✓ Approved - Ready for Payment', bg: 'rgba(74,222,128,0.2)' }
+      case 'Pending':
+        return { color: '#facc15', text: '⏳ Pending Approval', bg: 'rgba(250,204,21,0.2)' }
+      case 'Cancelled':
+        return { color: '#f87171', text: '✗ Cancelled', bg: 'rgba(248,113,113,0.2)' }
+      default:
+        return { color: 'rgba(255,255,255,0.5)', text: status || 'Pending', bg: 'rgba(255,255,255,0.1)' }
+    }
+  }
+
   return (
     <>
       <style>{`
         @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:0.4} }
         @keyframes fadeUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
         @keyframes slideIn { from{transform:translateX(100%)} to{transform:translateX(0)} }
+        @keyframes fadeOut { 0%{opacity:1} 70%{opacity:1} 100%{opacity:0} }
         @keyframes spin { to { transform: rotate(360deg); } }
         .orders-page { animation: fadeUp 0.4s ease both; }
-        .order-card { transition: all 0.2s ease; }
-        .order-card:hover { transform: translateY(-2px); }
+        .orders-table-row { transition: background 0.2s ease; }
+        .orders-table-row:hover { background: rgba(96,165,250,0.05) !important; }
         .scan-result { animation: slideIn 0.3s ease both; }
         .camera-preview { transform: scaleX(-1); }
+        .status-badge {
+          display: inline-block;
+          padding: 4px 12px;
+          border-radius: 20px;
+          font-size: 11px;
+          font-weight: bold;
+        }
       `}</style>
 
       <div className="orders-page" style={{
@@ -479,10 +480,10 @@ async function scanQRCode() {
           </div>
         </nav>
 
-        <main style={{ position: 'relative', zIndex: 1, maxWidth: '1000px', margin: '0 auto', padding: '40px 24px 80px' }}>
+        <main style={{ position: 'relative', zIndex: 1, maxWidth: '1400px', margin: '0 auto', padding: '40px 24px 80px' }}>
 
           {/* Heading */}
-          <div style={{ marginBottom: '40px' }}>
+          <div style={{ marginBottom: '32px' }}>
             <p style={{ fontSize: '10px', letterSpacing: '3px', textTransform: 'uppercase', color: '#60a5fa', margin: '0 0 8px' }}>
               Track and Pay
             </p>
@@ -494,7 +495,7 @@ async function scanQRCode() {
             </p>
           </div>
 
-          {/* Orders List */}
+          {/* Orders Table */}
           {orders.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '60px', background: 'rgba(255,255,255,0.02)', borderRadius: '16px' }}>
               <div style={{ fontSize: '64px', marginBottom: '16px' }}>📦</div>
@@ -505,151 +506,173 @@ async function scanQRCode() {
               <button onClick={() => navigate('/buyer')} style={{ padding: '10px 24px', background: '#4ade80', border: 'none', borderRadius: '8px', color: '#060c04', fontWeight: 'bold', cursor: 'pointer' }}>Browse Marketplace →</button>
             </div>
           ) : (
-            orders.map(order => (
-              <div
-                key={order.id}
-                className="order-card"
-                style={{
-                  marginBottom: '24px',
-                  background: 'rgba(255,255,255,0.03)',
-                  border: `1px solid ${hoveredOrder === order.id ? 'rgba(96,165,250,0.3)' : 'rgba(255,255,255,0.07)'}`,
-                  borderRadius: '16px',
-                  overflow: 'hidden'
-                }}
-                onMouseEnter={() => setHoveredOrder(order.id)}
-                onMouseLeave={() => setHoveredOrder(null)}
-              >
-                {/* Order Header */}
-                <div style={{
-                  padding: '20px',
-                  background: 'rgba(96,165,250,0.05)',
-                  borderBottom: '1px solid rgba(255,255,255,0.05)',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  flexWrap: 'wrap',
-                  gap: '12px'
-                }}>
-                  <div>
-                    <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.5)' }}>Order #{order.id}</div>
-                    <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
-                      Created: {new Date(order.date).toLocaleDateString()}
-                    </div>
-                  </div>
-                  <div>
-                    <span style={{
-                      display: 'inline-block',
-                      padding: '4px 12px',
-                      borderRadius: '20px',
-                      fontSize: '11px',
-                      fontWeight: 'bold',
-                      background: order.status === 'Paid' ? 'rgba(74,222,128,0.2)' : order.status === 'Cancelled' ? 'rgba(248,113,113,0.2)' : 'rgba(250,204,21,0.2)',
-                      color: order.status === 'Paid' ? '#4ade80' : order.status === 'Cancelled' ? '#f87171' : '#facc15'
-                    }}>
-                      {order.status || 'Pending Payment'}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#4ade80' }}>
-                    R{order.total.toFixed(2)}
-                  </div>
-                </div>
+            <div style={{ background: 'rgba(255,255,255,0.025)', backdropFilter: 'blur(16px)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: '16px', overflow: 'auto' }}>
+              {/* Table Header */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '180px 1fr 120px 100px 120px 100px 120px',
+                padding: '16px 20px',
+                borderBottom: '1px solid rgba(255,255,255,0.06)',
+                background: 'rgba(255,255,255,0.02)',
+                fontSize: '10px',
+                letterSpacing: '2px',
+                textTransform: 'uppercase',
+                color: 'rgba(255,255,255,0.3)',
+                minWidth: '940px'
+              }}>
+                <div>Order ID</div>
+                <div>Products</div>
+                <div>Order Date</div>
+                <div>Total</div>
+                <div>Delivery Date</div>
+                <div>Status</div>
+                <div>Action</div>
+              </div>
 
-                {/* Order Items */}
-                <div style={{ padding: '20px' }}>
-                  {order.items.map((item, idx) => (
-                    <div
-                      key={idx}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        padding: '12px 0',
-                        borderBottom: idx < order.items.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none'
-                      }}
-                    >
-                      <div>
-                        <div style={{ fontSize: '14px', color: '#fff' }}>
+              {/* Table Rows */}
+              {orders.map((order, index) => {
+                const statusInfo = getStatusInfo(order.status, order.deliveryDate)
+                const canPay = order.status === 'Approved'
+                const canCancel = order.status !== 'Paid' && order.status !== 'Cancelled'
+                
+                return (
+                  <div
+                    key={order.id}
+                    className="orders-table-row"
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '180px 1fr 120px 100px 120px 100px 120px',
+                      padding: '16px 20px',
+                      borderBottom: index < orders.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none',
+                      alignItems: 'center',
+                      background: hoveredRow === order.id ? 'rgba(96,165,250,0.03)' : 'transparent',
+                      minWidth: '940px',
+                      transition: 'background 0.2s'
+                    }}
+                    onMouseEnter={() => setHoveredRow(order.id)}
+                    onMouseLeave={() => setHoveredRow(null)}
+                  >
+                    {/* Order ID */}
+                    <div>
+                      <div style={{ fontSize: '12px', fontWeight: '600', color: '#60a5fa', fontFamily: 'monospace' }}>
+                        {order.id}
+                      </div>
+                      <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', marginTop: '2px' }}>
+                        {order.trackingNumber}
+                      </div>
+                    </div>
+
+                    {/* Products */}
+                    <div>
+                      {order.items.map((item, idx) => (
+                        <div key={idx} style={{ fontSize: '13px', color: '#fff', marginBottom: idx < order.items.length - 1 ? '4px' : 0 }}>
                           {item.quantity} × {item.name}
                         </div>
-                        <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)' }}>
-                          Farmer: {item.farmer} • Harvest ID: {item.id}
-                        </div>
-                      </div>
-                      <div style={{ fontSize: '14px', color: '#4ade80' }}>
-                        R{(item.price * item.quantity).toFixed(2)}
-                      </div>
+                      ))}
                     </div>
-                  ))}
 
-                  {/* Action Buttons */}
-                  <div style={{ marginTop: '20px', display: 'flex', gap: '12px' }}>
-                    {order.status !== 'Paid' && order.status !== 'Cancelled' && (
-                      <button
-                        onClick={() => openPaymentForOrder(order)}
-                        style={{
-                          flex: 1,
-                          padding: '12px',
-                          background: '#4ade80',
-                          border: 'none',
-                          borderRadius: '8px',
-                          color: '#060c04',
+                    {/* Order Date */}
+                    <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.5)' }}>
+                      {new Date(order.date).toLocaleDateString()}
+                    </div>
+
+                    {/* Total */}
+                    <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#4ade80' }}>
+                      R{order.total.toFixed(2)}
+                    </div>
+
+                    {/* Delivery Date */}
+                    <div>
+                      {order.deliveryDate && order.status === 'Approved' ? (
+                        <div>
+                          <div style={{ fontSize: '11px', color: '#4ade80', fontWeight: 'bold' }}>
+                            {new Date(order.deliveryDate).toLocaleDateString()}
+                          </div>
+                          <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)' }}>
+                            Scheduled
+                          </div>
+                        </div>
+                      ) : order.status === 'Pending' ? (
+                        <div style={{ fontSize: '11px', color: '#facc15' }}>
+                          Awaiting Approval
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
+                          —
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Status */}
+                    <div>
+                      <span className="status-badge" style={{
+                        background: statusInfo.bg,
+                        color: statusInfo.color
+                      }}>
+                        {statusInfo.text}
+                      </span>
+                      {order.approvedAt && order.status === 'Approved' && (
+                        <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', marginTop: '4px' }}>
+                          Approved: {new Date(order.approvedAt).toLocaleDateString()}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Action */}
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      {canPay && (
+                        <button
+                          onClick={() => openPaymentForOrder(order)}
+                          style={{
+                            padding: '6px 12px',
+                            background: '#4ade80',
+                            border: 'none',
+                            borderRadius: '6px',
+                            color: '#060c04',
+                            fontSize: '11px',
+                            fontWeight: 'bold',
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          📷 Pay Now
+                        </button>
+                      )}
+                      {canCancel && (
+                        <button
+                          onClick={() => cancelOrder(order.id)}
+                          style={{
+                            padding: '6px 12px',
+                            background: 'transparent',
+                            border: '1px solid rgba(248,113,113,0.3)',
+                            borderRadius: '6px',
+                            color: '#f87171',
+                            fontSize: '11px',
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      )}
+                      {order.status === 'Paid' && (
+                        <div style={{
+                          padding: '6px 12px',
+                          background: 'rgba(74,222,128,0.1)',
+                          borderRadius: '6px',
+                          color: '#4ade80',
+                          fontSize: '11px',
                           fontWeight: 'bold',
-                          fontSize: '14px',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        📷 Pay Now (Scan QR)
-                      </button>
-                    )}
-                    {order.status !== 'Paid' && order.status !== 'Cancelled' && (
-                      <button
-                        onClick={() => cancelOrder(order.id)}
-                        style={{
-                          flex: 1,
-                          padding: '12px',
-                          background: 'transparent',
-                          border: '1px solid rgba(248,113,113,0.3)',
-                          borderRadius: '8px',
-                          color: '#f87171',
-                          fontSize: '14px',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        Cancel Order
-                      </button>
-                    )}
-                    {order.status === 'Paid' && (
-                      <div style={{
-                        flex: 1,
-                        padding: '12px',
-                        background: 'rgba(74,222,128,0.1)',
-                        borderRadius: '8px',
-                        textAlign: 'center',
-                        color: '#4ade80',
-                        fontSize: '14px',
-                        fontWeight: 'bold'
-                      }}>
-                        ✓ Payment Completed
-                      </div>
-                    )}
-                    {order.status === 'Cancelled' && (
-                      <div style={{
-                        flex: 1,
-                        padding: '12px',
-                        background: 'rgba(248,113,113,0.1)',
-                        borderRadius: '8px',
-                        textAlign: 'center',
-                        color: '#f87171',
-                        fontSize: '14px',
-                        fontWeight: 'bold'
-                      }}>
-                        ✗ Order Cancelled
-                      </div>
-                    )}
+                          textAlign: 'center'
+                        }}>
+                          Complete
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </div>
-            ))
+                )
+              })}
+            </div>
           )}
         </main>
 
@@ -775,7 +798,6 @@ async function scanQRCode() {
                     </div>
                   )}
                   
-                  {/* Manual Entry Toggle */}
                   <button
                     onClick={() => {
                       if (cameraActive) stopCamera()

@@ -2,41 +2,53 @@ import { useNavigate } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import '@fontsource/bebas-neue'
 import '@fontsource/inter'
-import farmerIcon from '../assets/icons/farmers.png'
-import bgImage from '../assets/images/dave-hoefler-Envk7kTMWTQ-unsplash.jpg'
+import buyerIcon from '../assets/icons/user.png'
+import bgImage from '../assets/images/max-O_TVsaeZNlE-unsplash.jpg'
 import { supabase } from '../supabaseClient'
 
-export default function FarmerDashboard() {
+export default function BuyerScanner() {
   const navigate = useNavigate()
-  const [harvests, setHarvests] = useState([])
-  const [orders, setOrders] = useState([])
+  
+  // Cart state
+  const [cart, setCart] = useState([])
+  const [showCart, setShowCart] = useState(false)
+  const [showCheckout, setShowCheckout] = useState(false)
+  const [orderSuccess, setOrderSuccess] = useState(false)
+  const [lastOrder, setLastOrder] = useState(null)
+  
+  // UI state
+  const [searchTerm, setSearchTerm] = useState('')
+  const [selectedCategory, setSelectedCategory] = useState('All')
+  const [quantities, setQuantities] = useState({})
+  const [hoveredRow, setHoveredRow] = useState(null)
+  const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [filter, setFilter] = useState('All')
-  const [hoveredRow, setHoveredRow] = useState(null)
-  const [hoveredBtn, setHoveredBtn] = useState(null)
-  const [selectedHarvest, setSelectedHarvest] = useState(null)
-  const [showDetailsModal, setShowDetailsModal] = useState(false)
-  const [activeTab, setActiveTab] = useState('harvests') // 'harvests' or 'orders'
-  const [showApproveModal, setShowApproveModal] = useState(false)
-  const [selectedOrder, setSelectedOrder] = useState(null)
-  const [deliveryDate, setDeliveryDate] = useState('')
-  const [processing, setProcessing] = useState(false)
-  const [notificationMessage, setNotificationMessage] = useState(null)
+  
+  // QR Scanner Modal state
+  const [showQrModal, setShowQrModal] = useState(false)
+  const [qrInput, setQrInput] = useState('')
+  const [qrResult, setQrResult] = useState(null)
+  const [verifying, setVerifying] = useState(false)
 
-  const account = '0xFarmer...d92c'
+  // Notification state
+  const [buyerNotifications, setBuyerNotifications] = useState([])
+  const [showNotificationModal, setShowNotificationModal] = useState(false)
+  const [buyerNotificationCount, setBuyerNotificationCount] = useState(0)
 
-  // Fetch harvests and orders from Supabase
+  const account = '0xBuyer...f10a'
+
+  // Fetch products and notifications from Supabase
   useEffect(() => {
-    fetchHarvests()
-    fetchFarmerOrders()
+    fetchProducts()
+    loadBuyerNotifications()
     
-    // Set up real-time subscription for order updates
+    // Set up real-time subscription for notifications
     const subscription = supabase
-      .channel('orders_changes')
+      .channel('notifications_changes')
       .on('postgres_changes', 
-        { event: '*', schema: 'public', table: 'orders' }, 
-        () => fetchFarmerOrders()
+        { event: '*', schema: 'public', table: 'notifications', filter: `buyer_wallet=eq.${account}` }, 
+        () => loadBuyerNotifications()
       )
       .subscribe()
 
@@ -45,12 +57,10 @@ export default function FarmerDashboard() {
     }
   }, [])
 
-  async function fetchHarvests() {
+  async function fetchProducts() {
     setLoading(true)
     setError(null)
     try {
-      console.log('Fetching harvests from Supabase...')
-      
       const { data, error } = await supabase
         .from('harvests')
         .select('*')
@@ -59,1031 +69,778 @@ export default function FarmerDashboard() {
       if (error) {
         console.error('Supabase error:', error)
         setError(`Database error: ${error.message}`)
-        setHarvests([])
+        setProducts([])
       } else if (data && data.length > 0) {
-        console.log(`✅ Successfully loaded ${data.length} harvests`)
-        setHarvests(data)
+        console.log(`✅ Successfully loaded ${data.length} products`)
+        setProducts(data)
       } else {
-        console.warn('⚠️ No harvests found')
-        setHarvests([])
+        setError('No products found in database.')
+        setProducts([])
       }
     } catch (error) {
       console.error('Fetch error:', error)
       setError(error.message)
-      setHarvests([])
+      setProducts([])
     } finally {
       setLoading(false)
     }
   }
 
-  async function fetchFarmerOrders() {
+  async function loadBuyerNotifications() {
     try {
       const { data, error } = await supabase
-        .from('orders')
+        .from('notifications')
         .select('*')
-        .order('order_date', { ascending: false })
+        .eq('buyer_wallet', account)
+        .order('created_at', { ascending: false })
       
-      if (error) throw error
-      
-      // Filter orders that contain products from this farmer
-      const farmerOrders = (data || []).filter(order => 
-        order.items.some(item => item.farmer_wallet === account || item.farmer === 'Your Farm')
-      )
-      
-      setOrders(farmerOrders)
-      console.log(`Loaded ${farmerOrders.length} orders for farmer`)
+      if (!error && data) {
+        setBuyerNotifications(data)
+        const unreadCount = data.filter(n => !n.read).length
+        setBuyerNotificationCount(unreadCount)
+        
+        // Show toast for new unread notifications
+        const unread = data.filter(n => !n.read)
+        if (unread.length > 0 && !localStorage.getItem('notifications_shown')) {
+          showNotification(unread[0].message, '#60a5fa')
+          localStorage.setItem('notifications_shown', 'true')
+          setTimeout(() => localStorage.removeItem('notifications_shown'), 5000)
+        }
+      }
     } catch (error) {
-      console.error('Error loading farmer orders:', error)
+      console.error('Error loading notifications:', error)
     }
   }
 
-  async function approveOrder(order, deliveryDateValue) {
-    if (!deliveryDateValue) {
-      alert('Please select a delivery date')
+  async function markNotificationAsRead(notificationId) {
+    await supabase
+      .from('notifications')
+      .update({ read: true })
+      .eq('id', notificationId)
+    await loadBuyerNotifications()
+  }
+
+  async function markAllNotificationsAsRead() {
+    for (const notif of buyerNotifications.filter(n => !n.read)) {
+      await supabase
+        .from('notifications')
+        .update({ read: true })
+        .eq('id', notif.id)
+    }
+    await loadBuyerNotifications()
+  }
+
+  // Get unique categories
+  const categories = ['All', ...new Set(products.map(p => p.name?.split(' ').pop() || '').filter(Boolean))]
+
+  // Filter products
+  const filteredProducts = products.filter(product => {
+    const matchesSearch = (product.name?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+                          (product.farmer?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+                          (product.id?.toLowerCase() || '').includes(searchTerm.toLowerCase())
+    const matchesCategory = selectedCategory === 'All' || (product.name?.includes(selectedCategory) || false)
+    return matchesSearch && matchesCategory
+  })
+
+  function addToCart(product, quantity) {
+    const qty = quantity || 1
+    if (qty <= 0) return
+    
+    if (qty > product.stock) {
+      showNotification(`Only ${product.stock} ${product.unit}(s) available in stock`, '#f87171')
       return
     }
     
-    setProcessing(true)
+    setCart(prevCart => {
+      const existing = prevCart.find(item => item.id === product.id)
+      let newCart
+      if (existing) {
+        newCart = prevCart.map(item =>
+          item.id === product.id 
+            ? { ...item, quantity: item.quantity + qty }
+            : item
+        )
+      } else {
+        newCart = [...prevCart, { ...product, quantity: qty }]
+      }
+      return newCart
+    })
+    
+    showNotification(`✓ Added ${qty} ${product.unit}(s) of ${product.name}`)
+  }
+
+  function updateQuantity(productId, newQuantity) {
+    if (newQuantity <= 0) {
+      setCart(cart.filter(item => item.id !== productId))
+    } else {
+      setCart(cart.map(item =>
+        item.id === productId ? { ...item, quantity: newQuantity } : item
+      ))
+    }
+  }
+
+  function removeFromCart(productId) {
+    setCart(cart.filter(item => item.id !== productId))
+    showNotification('Item removed from cart', '#f87171')
+  }
+
+  const cartTotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0)
+
+  async function processCheckout() {
+    if (cart.length === 0) return
+    
+    setLoading(true)
     try {
-      // Update order status and delivery date
-      const { error } = await supabase
+      for (const item of cart) {
+        const product = products.find(p => p.id === item.id)
+        if (!product) {
+          throw new Error(`Product ${item.name} not found`)
+        }
+        if (product.stock < item.quantity) {
+          throw new Error(`Only ${product.stock} ${product.unit}s of ${product.name} available`)
+        }
+      }
+      
+      const farmerWallets = [...new Set(cart.map(item => item.farmer_wallet || 'unknown'))]
+      
+      const orderData = {
+        id: 'ORD-' + Math.random().toString(36).substr(2, 8).toUpperCase(),
+        buyer_wallet: account,
+        buyer_email: null,
+        items: cart.map(item => ({
+          id: item.id,
+          name: item.name,
+          farmer: item.farmer,
+          farmer_wallet: item.farmer_wallet,
+          quantity: item.quantity,
+          price: item.price,
+          unit: item.unit
+        })),
+        total: cartTotal,
+        status: 'Pending',
+        farmer_wallet: farmerWallets[0],
+        tracking_number: 'TRK' + Math.random().toString(36).substr(2, 8).toUpperCase(),
+        order_date: new Date().toISOString()
+      }
+      
+      const { data, error } = await supabase
         .from('orders')
-        .update({ 
-          status: 'Approved',
-          delivery_date: deliveryDateValue,
-          approved_at: new Date().toISOString()
-        })
-        .eq('id', order.id)
+        .insert([orderData])
+        .select()
       
-      if (error) throw error
+      if (error) throw new Error(error.message)
       
-      // Create notification for buyer
-      const notification = {
-        id: 'NOTIF-' + Math.random().toString(36).substr(2, 8).toUpperCase(),
-        buyer_wallet: order.buyer_wallet,
-        order_id: order.id,
-        message: `✅ Your order #${order.id} has been approved by the farmer! Delivery scheduled for ${new Date(deliveryDateValue).toLocaleDateString()}. Please check your orders page for details.`,
-        type: 'order_approved',
-        read: false,
-        created_at: new Date().toISOString(),
-        delivery_date: deliveryDateValue
-      }
+      setLastOrder(orderData)
+      setOrderSuccess(true)
+      setCart([])
+      setShowCheckout(false)
       
-      // Save notification to Supabase
-      const { error: notifError } = await supabase
-        .from('notifications')
-        .insert([notification])
-      
-      if (notifError) {
-        console.error('Error saving notification:', notifError)
-      }
-      
-      showNotificationMessage('✓ Order approved successfully! Buyer has been notified.')
-      
-      // Refresh orders
-      await fetchFarmerOrders()
-      setShowApproveModal(false)
-      setSelectedOrder(null)
-      setDeliveryDate('')
-      
+      setTimeout(() => setOrderSuccess(false), 5000)
+      showNotification('Order created! Waiting for farmer approval.', '#4ade80')
     } catch (error) {
-      console.error('Error approving order:', error)
-      alert('Failed to approve order. Please try again.')
+      console.error('Checkout error:', error)
+      showNotification(error.message || 'Failed to create order. Please try again.', '#f87171')
     } finally {
-      setProcessing(false)
+      setLoading(false)
     }
   }
 
-  function showNotificationMessage(message) {
-    setNotificationMessage(message)
-    setTimeout(() => setNotificationMessage(null), 3000)
+  function showNotification(message, color = '#4ade80') {
+    const notification = document.createElement('div')
+    notification.textContent = message
+    notification.style.cssText = `
+      position: fixed; bottom: 20px; right: 20px; background: ${color};
+      color: #060c04; padding: 12px 20px; border-radius: 8px;
+      z-index: 10000; animation: fadeOut 3s ease forwards;
+      font-weight: bold; font-size: 14px;
+    `
+    document.body.appendChild(notification)
+    setTimeout(() => notification.remove(), 3000)
   }
 
-  function getOrderStatusColor(status) {
-    switch(status) {
-      case 'Pending': return '#facc15'
-      case 'Approved': return '#4ade80'
-      case 'Paid': return '#60a5fa'
-      case 'Cancelled': return '#f87171'
-      default: return 'rgba(255,255,255,0.3)'
+  function updateProductQuantity(productId, value) {
+    const product = products.find(p => p.id === productId)
+    const newValue = parseInt(value) || 1
+    if (product && newValue > product.stock) {
+      showNotification(`Only ${product.stock} ${product.unit}(s) available`, '#f87171')
+      setQuantities({ ...quantities, [productId]: product.stock })
+    } else {
+      setQuantities({ ...quantities, [productId]: newValue })
     }
   }
 
-  // View harvest details
-  function viewHarvestDetails(harvest) {
-    setSelectedHarvest(harvest)
-    setShowDetailsModal(true)
+  function openQrVerification() {
+    setShowQrModal(true)
+    setQrInput('')
+    setQrResult(null)
   }
 
-  // Close modal
-  function closeModal() {
-    setShowDetailsModal(false)
-    setSelectedHarvest(null)
+  async function verifyProduct() {
+    if (!qrInput.trim()) {
+      alert('Please enter a Harvest ID')
+      return
+    }
+    
+    setVerifying(true)
+    const harvestId = qrInput.trim().toUpperCase()
+    
+    try {
+      const { data, error } = await supabase
+        .from('harvests')
+        .select('*')
+        .eq('id', harvestId)
+        .single()
+      
+      if (error || !data) {
+        setQrResult({
+          success: false,
+          message: '❌ Harvest ID not found. This product may be counterfeit!',
+          type: 'error'
+        })
+      } else {
+        setQrResult({
+          success: true,
+          message: `✓ VERIFIED! Authentic ${data.name} from ${data.farmer}. Harvested on ${data.harvest_date}. Chemicals: ${data.chemicals || 'None'}`,
+          type: 'success',
+          product: data
+        })
+      }
+    } catch (error) {
+      console.error('Verification error:', error)
+      setQrResult({
+        success: false,
+        message: '❌ Verification failed. Please try again.',
+        type: 'error'
+      })
+    } finally {
+      setVerifying(false)
+    }
   }
 
-  // Calculate growing days
-  function calculateGrowingDays(plantedDate, harvestDate) {
-    if (!plantedDate || !harvestDate) return 'N/A'
-    const planted = new Date(plantedDate)
-    const harvested = new Date(harvestDate)
-    const days = Math.round((harvested - planted) / (1000 * 60 * 60 * 24))
-    return days > 0 ? `${days} days` : 'N/A'
+  if (loading) {
+    return (
+      <div style={{ minHeight: '100vh', background: '#060c04', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ width: '40px', height: '40px', border: '3px solid rgba(74,222,128,0.2)', borderTopColor: '#4ade80', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 16px' }} />
+          <p style={{ color: 'rgba(255,255,255,0.5)' }}>Loading products...</p>
+        </div>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    )
   }
 
-  const totalHarvests = harvests.length
-  const totalStock = harvests.reduce((sum, h) => sum + (h.stock || 0), 0)
-  const totalValue = harvests.reduce((sum, h) => sum + ((h.price || 0) * (h.stock || 0)), 0)
-  const pendingOrders = orders.filter(o => o.status === 'Pending' || !o.status).length
-
-  const filters = ['All', 'Verified']
-
-  const filteredHarvests = filter === 'All' 
-    ? harvests 
-    : harvests.filter(h => h.verified === true)
+  if (error && products.length === 0) {
+    return (
+      <div style={{ minHeight: '100vh', background: '#060c04', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '20px' }}>
+        <div style={{ fontSize: '48px' }}>⚠️</div>
+        <h3 style={{ color: '#f87171' }}>Failed to Load Products</h3>
+        <p style={{ color: 'rgba(255,255,255,0.5)' }}>{error}</p>
+        <button onClick={fetchProducts} style={{ padding: '10px 24px', background: '#4ade80', border: 'none', borderRadius: '8px', color: '#060c04', fontWeight: 'bold', cursor: 'pointer' }}>Retry</button>
+      </div>
+    )
+  }
 
   return (
     <>
       <style>{`
         @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:0.4} }
         @keyframes fadeUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+        @keyframes fadeOut { 0%{opacity:1} 70%{opacity:1} 100%{opacity:0} }
         @keyframes slideIn { from{transform:translateX(100%)} to{transform:translateX(0)} }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .dash-page { animation: fadeUp 0.45s ease both; }
-        .table-row { transition: background 0.2s ease; cursor: pointer; }
-        .table-row:hover { background: rgba(74,222,128,0.04) !important; }
-        .order-card { transition: all 0.2s ease; }
-        .order-card:hover { transform: translateY(-2px); }
-        .modal-overlay {
-          position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          background: rgba(0,0,0,0.8);
-          backdrop-filter: blur(8px);
-          z-index: 1000;
-          display: flex;
-          align-items: center;
-          justify-content: center;
+        @keyframes bounce { 0%,100%{transform:scale(1)} 50%{transform:scale(1.2)} }
+        @keyframes modalFadeIn { from{opacity:0;transform:scale(0.95)} to{opacity:1;transform:scale(1)} }
+        .buyer-page { animation: fadeUp 0.4s ease both; }
+        .cart-sidebar { animation: slideIn 0.3s ease both; }
+        .product-table-row { transition: background 0.2s ease; }
+        .product-table-row:hover { background: rgba(96,165,250,0.05) !important; }
+        .notification-modal {
+          animation: modalFadeIn 0.2s ease;
         }
-        .modal-content {
-          background: #060c04;
-          border: 1px solid rgba(74,222,128,0.3);
-          border-radius: 16px;
-          padding: 32px;
-          max-width: 600px;
-          width: 90%;
-          max-height: 85vh;
-          overflow: auto;
-          animation: fadeUp 0.3s ease both;
-        }
-        ::-webkit-scrollbar { width: 4px; height: 4px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: rgba(74,222,128,0.2); border-radius: 4px; }
-        .tab-button {
+        .notification-item {
           transition: all 0.2s ease;
+        }
+        .notification-item:hover {
+          background: rgba(74,222,128,0.08);
+          transform: translateX(4px);
         }
       `}</style>
 
-      <div className="dash-page" style={{
-        fontFamily: "'Inter', sans-serif",
-        minHeight: '100vh',
-        background: '#060c04',
-        position: 'relative',
-        overflow: 'hidden',
-      }}>
+      <div className="buyer-page" style={{ fontFamily: "'Inter', sans-serif", minHeight: '100vh', background: '#060c04', position: 'relative', overflow: 'hidden' }}>
         {/* Background */}
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 0,
-          backgroundImage: `url(${bgImage})`,
-          backgroundSize: 'cover', backgroundPosition: 'center',
-          filter: 'brightness(0.22) saturate(0.6)',
-        }} />
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 0,
-          background: 'linear-gradient(135deg, rgba(4,9,2,0.92) 0%, rgba(6,12,4,0.80) 100%)',
-        }} />
-
-        {/* Notification Toast */}
-        {notificationMessage && (
-          <div style={{
-            position: 'fixed',
-            top: '20px',
-            right: '20px',
-            background: '#4ade80',
-            color: '#060c04',
-            padding: '12px 20px',
-            borderRadius: '8px',
-            zIndex: 1001,
-            animation: 'slideIn 0.3s ease',
-            fontWeight: 'bold'
-          }}>
-            {notificationMessage}
-          </div>
-        )}
+        <div style={{ position: 'fixed', inset: 0, zIndex: 0, backgroundImage: `url(${bgImage})`, backgroundSize: 'cover', backgroundPosition: 'center', filter: 'brightness(0.18) saturate(0.5)' }} />
+        <div style={{ position: 'fixed', inset: 0, zIndex: 0, background: 'linear-gradient(135deg, rgba(4,9,2,0.94) 0%, rgba(6,12,4,0.82) 100%)' }} />
 
         {/* Navbar */}
-        <nav style={{
-          position: 'sticky', top: 0, zIndex: 50,
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '0 32px', height: '60px',
-          background: 'rgba(4,9,2,0.85)',
-          backdropFilter: 'blur(20px)',
-          WebkitBackdropFilter: 'blur(20px)',
-          borderBottom: '1px solid rgba(74,222,128,0.10)',
-        }}>
+        <nav style={{ position: 'sticky', top: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 32px', height: '60px', background: 'rgba(4,9,2,0.85)', backdropFilter: 'blur(20px)', borderBottom: '1px solid rgba(96,165,250,0.10)' }}>
           <div onClick={() => navigate('/')} style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column', lineHeight: 1 }}>
             <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: '20px', letterSpacing: '3px' }}>
-              <span style={{ color: '#4ade80' }}>AGRI</span>
-              <span style={{ color: '#fff' }}>CHAIN</span>
+              <span style={{ color: '#4ade80' }}>AGRI</span><span style={{ color: '#fff' }}>CHAIN</span>
             </span>
-            <span style={{ fontSize: '7px', color: 'rgba(255,255,255,0.25)', letterSpacing: '2px', textTransform: 'uppercase' }}>Farmer Portal</span>
+            <span style={{ fontSize: '7px', color: 'rgba(255,255,255,0.25)', letterSpacing: '2px', textTransform: 'uppercase' }}>Marketplace</span>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{
-              width: '28px', height: '28px', borderRadius: '50%',
-              background: 'rgba(74,222,128,0.08)',
-              border: '1px solid rgba(74,222,128,0.2)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
-              <img src={farmerIcon} alt="Farmer" style={{ width: '16px', height: '16px', objectFit: 'contain' }} />
-            </div>
-            <span style={{ fontSize: '11px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.45)' }}>
-              Farmer Dashboard
-            </span>
-          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+            <button onClick={openQrVerification} style={{ background: 'transparent', border: '1px solid rgba(74,222,128,0.3)', color: '#4ade80', fontSize: '11px', letterSpacing: '1px', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>🔍 Verify Product</button>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: '6px',
-              padding: '5px 12px',
-              background: 'rgba(74,222,128,0.06)',
-              border: '1px solid rgba(74,222,128,0.18)',
-              borderRadius: '4px',
-            }}>
-              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#4ade80', display: 'inline-block', animation: 'pulse-dot 2s infinite' }} />
-              <span style={{ fontSize: '10px', color: '#4ade80', fontFamily: 'monospace', letterSpacing: '0.5px' }}>{account}</span>
+            <button onClick={() => setShowCart(!showCart)} style={{ position: 'relative', background: 'transparent', border: 'none', cursor: 'pointer', padding: '8px', fontSize: '24px' }}>
+              🛒
+              {cart.length > 0 && (
+                <span style={{ position: 'absolute', top: '-5px', right: '-5px', background: '#4ade80', color: '#060c04', borderRadius: '50%', width: '18px', height: '18px', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold' }}>
+                  {cart.reduce((sum, item) => sum + item.quantity, 0)}
+                </span>
+              )}
+            </button>
+
+            {/* Notification Bell with Modal */}
+            <div style={{ position: 'relative' }}>
+              <button
+                onClick={() => setShowNotificationModal(true)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: '20px',
+                  position: 'relative',
+                  padding: '8px'
+                }}
+              >
+                🔔
+                {buyerNotificationCount > 0 && (
+                  <span style={{
+                    position: 'absolute',
+                    top: '-2px',
+                    right: '-2px',
+                    background: '#f87171',
+                    color: '#fff',
+                    borderRadius: '50%',
+                    width: '18px',
+                    height: '18px',
+                    fontSize: '10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontWeight: 'bold',
+                    animation: 'bounce 0.5s ease'
+                  }}>
+                    {buyerNotificationCount}
+                  </span>
+                )}
+              </button>
             </div>
-            <button
-              onClick={() => navigate('/register-harvest')}
-              style={{
-                background: hoveredBtn === 'register' ? 'rgba(74,222,128,0.15)' : 'rgba(74,222,128,0.08)',
-                border: '1px solid rgba(74,222,128,0.45)',
-                borderRadius: '6px',
-                color: '#4ade80',
-                fontSize: '10px',
-                letterSpacing: '1.5px',
-                textTransform: 'uppercase',
-                padding: '5px 14px',
-                cursor: 'pointer',
-                transition: 'all 0.2s',
-              }}
-              onMouseEnter={() => setHoveredBtn('register')}
-              onMouseLeave={() => setHoveredBtn(null)}
-            >
-              + New Harvest
-            </button>
-            <button
-              onClick={() => navigate('/')}
-              style={{
-                background: 'transparent',
-                border: '1px solid rgba(255,255,255,0.12)',
-                color: 'rgba(255,255,255,0.35)',
-                fontSize: '10px', letterSpacing: '1.5px', textTransform: 'uppercase',
-                padding: '5px 14px', borderRadius: '4px', cursor: 'pointer',
-                transition: 'all 0.2s',
-              }}
-              onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.3)'; e.currentTarget.style.color = '#fff' }}
-              onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.12)'; e.currentTarget.style.color = 'rgba(255,255,255,0.35)' }}
-            >
-              Exit
-            </button>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px', background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.18)', borderRadius: '4px' }}>
+              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#60a5fa', display: 'inline-block', animation: 'pulse-dot 2s infinite' }} />
+              <span style={{ fontSize: '10px', color: '#60a5fa', fontFamily: 'monospace' }}>{account}</span>
+            </div>
+            
+            <button onClick={() => navigate('/buyer-orders')} style={{ background: 'transparent', border: '1px solid rgba(96,165,250,0.3)', color: '#60a5fa', fontSize: '10px', letterSpacing: '1.5px', textTransform: 'uppercase', padding: '5px 14px', borderRadius: '4px', cursor: 'pointer' }}>My Orders</button>
+            <button onClick={() => navigate('/')} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.35)', fontSize: '10px', letterSpacing: '1.5px', textTransform: 'uppercase', padding: '5px 14px', borderRadius: '4px', cursor: 'pointer' }}>Exit</button>
           </div>
         </nav>
 
         {/* Main Content */}
-        <main style={{ position: 'relative', zIndex: 1, maxWidth: '1200px', margin: '0 auto', padding: '40px 24px 80px' }}>
-
-          {/* Page Heading */}
-          <div style={{ marginBottom: '36px' }}>
-            <p style={{ fontSize: '10px', letterSpacing: '3px', textTransform: 'uppercase', color: '#4ade80', margin: '0 0 8px' }}>
-              Welcome back
-            </p>
-            <h1 style={{
-              fontFamily: "'Bebas Neue', sans-serif",
-              fontSize: 'clamp(40px, 6vw, 72px)',
-              color: '#fff', letterSpacing: '2px', lineHeight: '0.9',
-              margin: '0 0 10px',
-            }}>
-              YOUR <span style={{ color: '#4ade80' }}>FARM</span>
-            </h1>
-            <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', margin: 0, letterSpacing: '0.2px' }}>
-              Manage your harvests and customer orders.
-            </p>
-          </div>
-
-          {/* Stat Cards */}
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-            gap: '14px',
-            marginBottom: '36px',
-          }}>
-            <div style={{
-              padding: '20px 22px',
-              background: 'rgba(255,255,255,0.03)',
-              backdropFilter: 'blur(12px)',
-              border: '1px solid rgba(74,222,128,0.14)',
-              borderRadius: '12px',
-              position: 'relative',
-              overflow: 'hidden',
-            }}>
-              <div style={{
-                position: 'absolute', top: 0, left: 0, right: 0, height: '2px',
-                background: 'linear-gradient(to right, #4ade80, transparent)',
-                opacity: 0.5,
-              }} />
-              <div style={{ fontSize: '9px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.28)', marginBottom: '10px' }}>
-                Total Harvests
-              </div>
-              <div style={{
-                fontFamily: "'Bebas Neue', sans-serif",
-                fontSize: '48px', color: '#4ade80',
-                lineHeight: 1, letterSpacing: '1px',
-              }}>
-                {totalHarvests}
-              </div>
-              <div style={{
-                position: 'absolute', bottom: '-8px', right: '12px',
-                fontFamily: "'Bebas Neue', sans-serif",
-                fontSize: '72px', color: '#4ade80', opacity: 0.04,
-                lineHeight: 1, pointerEvents: 'none',
-              }}>
-                {totalHarvests}
-              </div>
+        <main style={{ position: 'relative', zIndex: 1, maxWidth: '1400px', margin: '0 auto', padding: '40px 24px 80px' }}>
+          {orderSuccess && lastOrder && (
+            <div style={{ marginBottom: '24px', padding: '20px', background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.3)', borderRadius: '12px', textAlign: 'center' }}>
+              <div style={{ fontSize: '32px', marginBottom: '8px' }}>📦</div>
+              <h3 style={{ color: '#4ade80', marginBottom: '8px' }}>Order Created!</h3>
+              <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '14px' }}>
+                Order #{lastOrder.id} - Go to <strong>"My Orders"</strong> to complete payment when your product arrives.
+              </p>
+              <button onClick={() => navigate('/buyer-orders')} style={{ marginTop: '12px', padding: '8px 20px', background: '#4ade80', border: 'none', borderRadius: '6px', color: '#060c04', cursor: 'pointer', fontWeight: 'bold' }}>View My Orders →</button>
             </div>
-
-            <div style={{
-              padding: '20px 22px',
-              background: 'rgba(255,255,255,0.03)',
-              backdropFilter: 'blur(12px)',
-              border: '1px solid rgba(74,222,128,0.14)',
-              borderRadius: '12px',
-              position: 'relative',
-              overflow: 'hidden',
-            }}>
-              <div style={{
-                position: 'absolute', top: 0, left: 0, right: 0, height: '2px',
-                background: 'linear-gradient(to right, #60a5fa, transparent)',
-                opacity: 0.5,
-              }} />
-              <div style={{ fontSize: '9px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.28)', marginBottom: '10px' }}>
-                Total Stock
-              </div>
-              <div style={{
-                fontFamily: "'Bebas Neue', sans-serif",
-                fontSize: '48px', color: '#60a5fa',
-                lineHeight: 1, letterSpacing: '1px',
-              }}>
-                {totalStock}
-              </div>
-              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.22)' }}>units available</div>
-            </div>
-
-            <div style={{
-              padding: '20px 22px',
-              background: 'rgba(255,255,255,0.03)',
-              backdropFilter: 'blur(12px)',
-              border: '1px solid rgba(74,222,128,0.14)',
-              borderRadius: '12px',
-              position: 'relative',
-              overflow: 'hidden',
-            }}>
-              <div style={{
-                position: 'absolute', top: 0, left: 0, right: 0, height: '2px',
-                background: 'linear-gradient(to right, #facc15, transparent)',
-                opacity: 0.5,
-              }} />
-              <div style={{ fontSize: '9px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.28)', marginBottom: '10px' }}>
-                Pending Orders
-              </div>
-              <div style={{
-                fontFamily: "'Bebas Neue', sans-serif",
-                fontSize: '48px', color: '#facc15',
-                lineHeight: 1, letterSpacing: '1px',
-              }}>
-                {pendingOrders}
-              </div>
-              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.22)' }}>awaiting approval</div>
-            </div>
-          </div>
-
-          {/* Tab Navigation */}
-          <div style={{
-            display: 'flex',
-            gap: '12px',
-            marginBottom: '24px',
-            borderBottom: '1px solid rgba(255,255,255,0.1)',
-            paddingBottom: '12px'
-          }}>
-            <button
-              className="tab-button"
-              onClick={() => setActiveTab('harvests')}
-              style={{
-                padding: '8px 20px',
-                background: activeTab === 'harvests' ? 'rgba(74,222,128,0.15)' : 'transparent',
-                border: activeTab === 'harvests' ? '1px solid rgba(74,222,128,0.4)' : '1px solid rgba(255,255,255,0.1)',
-                borderRadius: '8px',
-                color: activeTab === 'harvests' ? '#4ade80' : 'rgba(255,255,255,0.5)',
-                fontSize: '12px',
-                fontWeight: 'bold',
-                cursor: 'pointer',
-                transition: 'all 0.2s'
-              }}
-            >
-              🌾 My Harvests
-            </button>
-            <button
-              className="tab-button"
-              onClick={() => setActiveTab('orders')}
-              style={{
-                padding: '8px 20px',
-                background: activeTab === 'orders' ? 'rgba(74,222,128,0.15)' : 'transparent',
-                border: activeTab === 'orders' ? '1px solid rgba(74,222,128,0.4)' : '1px solid rgba(255,255,255,0.1)',
-                borderRadius: '8px',
-                color: activeTab === 'orders' ? '#4ade80' : 'rgba(255,255,255,0.5)',
-                fontSize: '12px',
-                fontWeight: 'bold',
-                cursor: 'pointer',
-                transition: 'all 0.2s'
-              }}
-            >
-              📦 Customer Orders {pendingOrders > 0 && `(${pendingOrders})`}
-            </button>
-          </div>
-
-          {/* HARVESTS TAB */}
-          {activeTab === 'harvests' && (
-            <>
-              {/* Filter and Actions */}
-              <div style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                flexWrap: 'wrap', gap: '12px',
-                marginBottom: '16px',
-              }}>
-                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                  {filters.map(f => (
-                    <button
-                      key={f}
-                      onClick={() => setFilter(f)}
-                      style={{
-                        padding: '5px 16px',
-                        borderRadius: '20px',
-                        border: filter === f ? '1px solid rgba(74,222,128,0.5)' : '1px solid rgba(255,255,255,0.1)',
-                        background: filter === f ? 'rgba(74,222,128,0.1)' : 'transparent',
-                        color: filter === f ? '#4ade80' : 'rgba(255,255,255,0.35)',
-                        fontSize: '10px', letterSpacing: '1.5px', textTransform: 'uppercase',
-                        cursor: 'pointer', transition: 'all 0.2s',
-                      }}
-                    >
-                      {f}
-                    </button>
-                  ))}
-                </div>
-                <button
-                  onClick={fetchHarvests}
-                  style={{
-                    padding: '5px 14px',
-                    background: 'transparent',
-                    border: '1px solid rgba(96,165,250,0.3)',
-                    borderRadius: '6px',
-                    color: '#60a5fa',
-                    fontSize: '10px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  🔄 Refresh
-                </button>
-              </div>
-
-              {/* Harvests Table */}
-              {loading ? (
-                <div style={{ textAlign: 'center', padding: '60px' }}>
-                  <div style={{
-                    width: '40px', height: '40px',
-                    border: '3px solid rgba(74,222,128,0.2)',
-                    borderTopColor: '#4ade80',
-                    borderRadius: '50%',
-                    animation: 'spin 0.8s linear infinite',
-                    margin: '0 auto 16px',
-                  }} />
-                  <p style={{ color: 'rgba(255,255,255,0.5)' }}>Loading harvests...</p>
-                </div>
-              ) : error ? (
-                <div style={{ textAlign: 'center', padding: '60px', background: 'rgba(255,255,255,0.02)', borderRadius: '16px' }}>
-                  <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚠️</div>
-                  <p style={{ color: '#f87171' }}>{error}</p>
-                  <button onClick={fetchHarvests} style={{ marginTop: '16px', padding: '8px 20px', background: '#4ade80', border: 'none', borderRadius: '6px', color: '#060c04', cursor: 'pointer' }}>Retry</button>
-                </div>
-              ) : filteredHarvests.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '60px', background: 'rgba(255,255,255,0.02)', borderRadius: '16px' }}>
-                  <div style={{ fontSize: '48px', marginBottom: '16px' }}>🌾</div>
-                  <p style={{ color: 'rgba(255,255,255,0.3)' }}>No harvests found.</p>
-                  <button onClick={() => navigate('/register-harvest')} style={{ marginTop: '16px', padding: '8px 20px', background: '#4ade80', border: 'none', borderRadius: '6px', color: '#060c04', cursor: 'pointer' }}>Register Your First Harvest →</button>
-                </div>
-              ) : (
-                <div style={{
-                  background: 'rgba(255,255,255,0.025)',
-                  backdropFilter: 'blur(16px)',
-                  border: '1px solid rgba(255,255,255,0.07)',
-                  borderRadius: '14px',
-                  overflow: 'hidden',
-                }}>
-                  {/* Table Header */}
-                  <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: '70px 1fr 120px 100px 100px 80px 100px',
-                    padding: '12px 20px',
-                    borderBottom: '1px solid rgba(255,255,255,0.06)',
-                    background: 'rgba(255,255,255,0.02)',
-                  }}>
-                    <div style={{ fontSize: '8px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.22)' }}>ID</div>
-                    <div style={{ fontSize: '8px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.22)' }}>Harvest Name</div>
-                    <div style={{ fontSize: '8px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.22)' }}>Crop</div>
-                    <div style={{ fontSize: '8px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.22)' }}>Harvest Date</div>
-                    <div style={{ fontSize: '8px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.22)' }}>Price</div>
-                    <div style={{ fontSize: '8px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.22)' }}>Stock</div>
-                    <div style={{ fontSize: '8px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.22)' }}>Status</div>
-                  </div>
-
-                  {/* Table Rows */}
-                  {filteredHarvests.map((harvest, index) => (
-                    <div
-                      key={harvest.id}
-                      className="table-row"
-                      onClick={() => viewHarvestDetails(harvest)}
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: '70px 1fr 120px 100px 100px 80px 100px',
-                        padding: '14px 20px',
-                        borderBottom: index < filteredHarvests.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none',
-                        alignItems: 'center',
-                        cursor: 'pointer',
-                        background: hoveredRow === harvest.id ? 'rgba(74,222,128,0.04)' : 'transparent',
-                        transition: 'background 0.2s',
-                      }}
-                      onMouseEnter={() => setHoveredRow(harvest.id)}
-                      onMouseLeave={() => setHoveredRow(null)}
-                    >
-                      <div style={{ fontFamily: 'monospace', fontSize: '11px', color: '#4ade80', letterSpacing: '0.5px' }}>
-                        {harvest.id}
-                      </div>
-                      <div style={{ fontSize: '13px', fontWeight: '500', color: '#fff' }}>
-                        {harvest.name}
-                      </div>
-                      <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.6)' }}>
-                        {harvest.crop} {harvest.image}
-                      </div>
-                      <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>
-                        {harvest.harvest_date}
-                      </div>
-                      <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#4ade80' }}>
-                        R{harvest.price} / {harvest.unit}
-                      </div>
-                      <div style={{ fontSize: '13px', color: harvest.stock > 0 ? '#fff' : '#f87171' }}>
-                        {harvest.stock} {harvest.unit}s
-                      </div>
-                      <div>
-                        <span style={{
-                          display: 'inline-flex', alignItems: 'center',
-                          padding: '3px 10px',
-                          borderRadius: '20px',
-                          background: 'rgba(74,222,128,0.08)',
-                          border: '1px solid rgba(74,222,128,0.25)',
-                          fontSize: '9px',
-                          color: '#4ade80',
-                        }}>
-                          ✓ Verified
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
           )}
 
-          {/* ORDERS TAB */}
-          {activeTab === 'orders' && (
+          <div style={{ marginBottom: '32px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: '16px' }}>
             <div>
-              {orders.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '60px', background: 'rgba(255,255,255,0.02)', borderRadius: '16px' }}>
-                  <div style={{ fontSize: '64px', marginBottom: '16px' }}>📋</div>
-                  <h3 style={{ color: '#fff', marginBottom: '8px' }}>No Orders Yet</h3>
-                  <p style={{ color: 'rgba(255,255,255,0.4)', marginBottom: '24px' }}>
-                    When customers place orders containing your products, they'll appear here.
-                  </p>
+              <p style={{ fontSize: '10px', letterSpacing: '3px', textTransform: 'uppercase', color: '#60a5fa', margin: '0 0 8px' }}>Fresh from the Farm</p>
+              <h1 style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 'clamp(40px, 6vw, 68px)', color: '#fff', letterSpacing: '2px', lineHeight: '0.9', margin: 0 }}>MARKETPLACE</h1>
+              <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', marginTop: '8px' }}>
+                Add items to cart, create order, then complete payment when product arrives.
+              </p>
+              {products.length > 0 && <p style={{ fontSize: '11px', color: '#4ade80', marginTop: '8px' }}>✓ {products.length} verified products available</p>}
+            </div>
+            <div style={{ padding: '12px 20px', background: 'rgba(74,222,128,0.05)', border: '1px solid rgba(74,222,128,0.2)', borderRadius: '8px', textAlign: 'center' }}>
+              <div style={{ fontSize: '24px' }}>✓</div>
+              <div style={{ fontSize: '10px', color: '#4ade80' }}>Blockchain Verified</div>
+            </div>
+          </div>
+
+          {/* Search and Filter */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', marginBottom: '24px' }}>
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+              {categories.map(cat => (
+                <button key={cat} onClick={() => setSelectedCategory(cat)} style={{ padding: '6px 16px', borderRadius: '20px', border: selectedCategory === cat ? '1px solid #60a5fa' : '1px solid rgba(255,255,255,0.1)', background: selectedCategory === cat ? 'rgba(96,165,250,0.15)' : 'transparent', color: selectedCategory === cat ? '#60a5fa' : 'rgba(255,255,255,0.4)', fontSize: '11px', cursor: 'pointer' }}>{cat}</button>
+              ))}
+            </div>
+            <input type="text" placeholder="Search by name, farmer, or ID..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} style={{ padding: '8px 16px', width: '280px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '20px', color: '#fff', fontSize: '12px', outline: 'none' }} />
+          </div>
+
+          {/* PRODUCTS TABLE */}
+          {filteredProducts.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '60px', background: 'rgba(255,255,255,0.02)', borderRadius: '16px', color: 'rgba(255,255,255,0.3)' }}>
+              <div style={{ fontSize: '48px', marginBottom: '16px' }}>🌾</div>
+              <p>No products found.</p>
+              <button onClick={fetchProducts} style={{ marginTop: '16px', padding: '8px 16px', background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: '6px', color: '#60a5fa', cursor: 'pointer' }}>Refresh</button>
+            </div>
+          ) : (
+            <div style={{ background: 'rgba(255,255,255,0.025)', backdropFilter: 'blur(16px)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: '16px', overflow: 'auto' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '60px 80px 1fr 120px 100px 100px 100px 80px 120px', padding: '14px 20px', borderBottom: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)', fontSize: '9px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)', minWidth: '1000px' }}>
+                <div>#</div><div>Image</div><div>Product</div><div>Farmer</div><div>Harvest Date</div><div>Chemicals</div><div>Price</div><div>Stock</div><div>Action</div>
+              </div>
+
+              {filteredProducts.map((product, index) => (
+                <div key={product.id} className="product-table-row" style={{ display: 'grid', gridTemplateColumns: '60px 80px 1fr 120px 100px 100px 100px 80px 120px', padding: '16px 20px', borderBottom: index < filteredProducts.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none', alignItems: 'center', background: hoveredRow === product.id ? 'rgba(96,165,250,0.03)' : 'transparent', minWidth: '1000px' }} onMouseEnter={() => setHoveredRow(product.id)} onMouseLeave={() => setHoveredRow(null)}>
+                  <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>{index + 1}</div>
+                  <div style={{ fontSize: '32px' }}>{product.image || '🌾'}</div>
+                  <div><div style={{ fontSize: '14px', fontWeight: '600', color: '#fff' }}>{product.name}</div><div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)' }}>ID: {product.id}</div></div>
+                  <div><div style={{ fontSize: '12px', color: '#fff' }}>{product.farmer}</div><div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)' }}>{product.location}</div></div>
+                  <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.6)' }}>{product.harvest_date}</div>
+                  <div><span style={{ display: 'inline-block', padding: '3px 8px', borderRadius: '12px', fontSize: '10px', background: product.chemicals === 'None' || !product.chemicals ? 'rgba(74,222,128,0.15)' : 'rgba(250,204,21,0.15)', color: product.chemicals === 'None' || !product.chemicals ? '#4ade80' : '#facc15' }}>{product.chemicals || 'None'}</span></div>
+                  <div><div style={{ fontSize: '16px', fontWeight: 'bold', color: '#4ade80' }}>R{product.price}</div><div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)' }}>per {product.unit}</div></div>
+                  <div><div style={{ fontSize: '13px', color: product.stock > 0 ? '#fff' : '#f87171' }}>{product.stock}</div><div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)' }}>{product.unit}s left</div></div>
+                  <div><div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <input type="number" min="1" max={product.stock} disabled={product.stock === 0} value={quantities[product.id] || 1} onChange={e => updateProductQuantity(product.id, e.target.value)} style={{ width: '55px', padding: '6px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', color: product.stock === 0 ? 'rgba(255,255,255,0.3)' : '#fff', textAlign: 'center', fontSize: '11px' }} />
+                    <button onClick={() => addToCart(product, quantities[product.id] || 1)} disabled={product.stock === 0} style={{ padding: '6px 12px', background: product.stock === 0 ? 'rgba(255,255,255,0.05)' : 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: '6px', color: product.stock === 0 ? 'rgba(255,255,255,0.3)' : '#60a5fa', fontSize: '10px', fontWeight: 'bold', cursor: product.stock === 0 ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>{product.stock === 0 ? 'Out of Stock' : '🛒 Add'}</button>
+                  </div></div>
                 </div>
+              ))}
+            </div>
+          )}
+        </main>
+
+        {/* Shopping Cart Sidebar */}
+        {showCart && (
+          <div className="cart-sidebar" style={{ position: 'fixed', top: 0, right: 0, width: '400px', height: '100vh', background: 'rgba(6,12,4,0.98)', backdropFilter: 'blur(20px)', borderLeft: '1px solid rgba(96,165,250,0.2)', zIndex: 1000, display: 'flex', flexDirection: 'column', boxShadow: '-20px 0 40px rgba(0,0,0,0.5)' }}>
+            <div style={{ padding: '20px', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ color: '#fff' }}>Your Cart ({cart.reduce((sum, i) => sum + i.quantity, 0)} items)</h3>
+              <button onClick={() => setShowCart(false)} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)', fontSize: '20px', cursor: 'pointer' }}>✕</button>
+            </div>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
+              {cart.length === 0 ? (
+                <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.3)', padding: '40px' }}><div style={{ fontSize: '48px', marginBottom: '16px' }}>🛒</div><p>Your cart is empty</p></div>
               ) : (
-                orders.map(order => (
-                  <div
-                    key={order.id}
-                    className="order-card"
-                    style={{
-                      marginBottom: '24px',
-                      background: 'rgba(255,255,255,0.03)',
-                      border: '1px solid rgba(255,255,255,0.07)',
-                      borderRadius: '16px',
-                      overflow: 'hidden'
-                    }}
-                  >
-                    {/* Order Header */}
-                    <div style={{
-                      padding: '20px',
-                      background: 'rgba(96,165,250,0.05)',
-                      borderBottom: '1px solid rgba(255,255,255,0.05)',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      flexWrap: 'wrap',
-                      gap: '12px'
-                    }}>
-                      <div>
-                        <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.5)' }}>Order #{order.id}</div>
-                        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
-                          Buyer: {order.buyer_wallet?.slice(0, 10)}...{order.buyer_wallet?.slice(-6)}
-                        </div>
-                        <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>
-                          Created: {new Date(order.order_date).toLocaleString()}
-                        </div>
+                cart.map(item => (
+                  <div key={item.id} style={{ marginBottom: '16px', padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}><div><div style={{ fontWeight: 'bold', color: '#fff' }}>{item.name}</div><div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>by {item.farmer}</div></div><div style={{ color: '#4ade80', fontWeight: 'bold' }}>R{(item.price * item.quantity).toFixed(2)}</div></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <button onClick={() => updateQuantity(item.id, item.quantity - 1)} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', width: '24px', height: '24px', borderRadius: '4px', color: '#fff', cursor: 'pointer' }}>-</button>
+                        <span style={{ color: '#fff' }}>{item.quantity}</span>
+                        <button onClick={() => updateQuantity(item.id, item.quantity + 1)} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', width: '24px', height: '24px', borderRadius: '4px', color: '#fff', cursor: 'pointer' }}>+</button>
                       </div>
-                      <div>
-                        <span style={{
-                          display: 'inline-block',
-                          padding: '4px 12px',
-                          borderRadius: '20px',
-                          fontSize: '11px',
-                          fontWeight: 'bold',
-                          background: `rgba(${getOrderStatusColor(order.status).slice(4, -1)}, 0.2)`,
-                          color: getOrderStatusColor(order.status)
-                        }}>
-                          {order.status || 'Pending'}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#4ade80' }}>
-                        R{order.total?.toFixed(2)}
-                      </div>
-                    </div>
-
-                    {/* Order Items */}
-                    <div style={{ padding: '20px' }}>
-                      <div style={{ marginBottom: '16px', fontSize: '12px', color: 'rgba(255,255,255,0.6)' }}>
-                        Products Ordered:
-                      </div>
-                      {order.items.map((item, idx) => (
-                        <div
-                          key={idx}
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            padding: '12px 0',
-                            borderBottom: idx < order.items.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none'
-                          }}
-                        >
-                          <div>
-                            <div style={{ fontSize: '14px', color: '#fff' }}>
-                              {item.quantity} × {item.name}
-                            </div>
-                            <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)' }}>
-                              Harvest ID: {item.id} • Unit: {item.unit}
-                            </div>
-                          </div>
-                          <div style={{ fontSize: '14px', color: '#4ade80' }}>
-                            R{(item.price * item.quantity).toFixed(2)}
-                          </div>
-                        </div>
-                      ))}
-
-                      {/* Delivery Date Display */}
-                      {order.delivery_date && (
-                        <div style={{
-                          marginTop: '16px',
-                          padding: '12px',
-                          background: 'rgba(74,222,128,0.1)',
-                          borderRadius: '8px',
-                          border: '1px solid rgba(74,222,128,0.2)'
-                        }}>
-                          <div style={{ fontSize: '11px', color: '#4ade80', marginBottom: '4px' }}>📦 Scheduled Delivery Date:</div>
-                          <div style={{ fontSize: '13px', color: '#fff' }}>{new Date(order.delivery_date).toLocaleDateString()}</div>
-                        </div>
-                      )}
-
-                      {/* Action Buttons */}
-                      <div style={{ marginTop: '20px', display: 'flex', gap: '12px' }}>
-                        {(order.status === 'Pending' || !order.status) && (
-                          <button
-                            onClick={() => {
-                              setSelectedOrder(order)
-                              setShowApproveModal(true)
-                            }}
-                            style={{
-                              flex: 1,
-                              padding: '12px',
-                              background: '#4ade80',
-                              border: 'none',
-                              borderRadius: '8px',
-                              color: '#060c04',
-                              fontWeight: 'bold',
-                              fontSize: '14px',
-                              cursor: 'pointer'
-                            }}
-                          >
-                            ✓ Approve Order & Set Delivery Date
-                          </button>
-                        )}
-                        {order.status === 'Approved' && (
-                          <div style={{
-                            flex: 1,
-                            padding: '12px',
-                            background: 'rgba(74,222,128,0.1)',
-                            borderRadius: '8px',
-                            textAlign: 'center',
-                            color: '#4ade80',
-                            fontSize: '14px',
-                            fontWeight: 'bold'
-                          }}>
-                            ✓ Order Approved - Waiting for Payment
-                          </div>
-                        )}
-                        {order.status === 'Paid' && (
-                          <div style={{
-                            flex: 1,
-                            padding: '12px',
-                            background: 'rgba(96,165,250,0.1)',
-                            borderRadius: '8px',
-                            textAlign: 'center',
-                            color: '#60a5fa',
-                            fontSize: '14px',
-                            fontWeight: 'bold'
-                          }}>
-                            💰 Payment Received - Order Complete
-                          </div>
-                        )}
-                        {order.status === 'Cancelled' && (
-                          <div style={{
-                            flex: 1,
-                            padding: '12px',
-                            background: 'rgba(248,113,113,0.1)',
-                            borderRadius: '8px',
-                            textAlign: 'center',
-                            color: '#f87171',
-                            fontSize: '14px',
-                            fontWeight: 'bold'
-                          }}>
-                            ✗ Order Cancelled
-                          </div>
-                        )}
-                      </div>
+                      <button onClick={() => removeFromCart(item.id)} style={{ background: 'none', border: 'none', color: '#f87171', fontSize: '11px', cursor: 'pointer' }}>Remove</button>
                     </div>
                   </div>
                 ))
               )}
             </div>
-          )}
+            {cart.length > 0 && (
+              <div style={{ padding: '20px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}><span style={{ color: '#fff' }}>Total:</span><span style={{ fontSize: '20px', fontWeight: 'bold', color: '#4ade80' }}>R{cartTotal.toFixed(2)}</span></div>
+                <button onClick={() => { setShowCart(false); setShowCheckout(true); }} style={{ width: '100%', padding: '14px', background: '#4ade80', border: 'none', borderRadius: '8px', color: '#060c04', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer' }}>Create Order →</button>
+              </div>
+            )}
+          </div>
+        )}
 
-          {/* Footer */}
+        {/* Checkout Modal */}
+        {showCheckout && (
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(8px)', zIndex: 1001, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ background: 'rgba(6,12,4,0.98)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: '16px', padding: '32px', maxWidth: '500px', width: '90%' }}>
+              <h2 style={{ color: '#fff', marginBottom: '20px' }}>Confirm Order</h2>
+              <div style={{ marginBottom: '20px' }}>
+                {cart.map(item => (
+                  <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '14px' }}>
+                    <span style={{ color: 'rgba(255,255,255,0.7)' }}>{item.quantity} × {item.name}</span>
+                    <span style={{ color: '#fff' }}>R{(item.price * item.quantity).toFixed(2)}</span>
+                  </div>
+                ))}
+                <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', marginTop: '12px', paddingTop: '12px', display: 'flex', justifyContent: 'space-between', fontWeight: 'bold' }}>
+                  <span style={{ color: '#fff' }}>Total</span>
+                  <span style={{ color: '#4ade80', fontSize: '18px' }}>R{cartTotal.toFixed(2)}</span>
+                </div>
+              </div>
+              
+              <div style={{ background: 'rgba(250,204,21,0.1)', border: '1px solid rgba(250,204,21,0.3)', borderRadius: '8px', padding: '16px', marginBottom: '24px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                  <span style={{ fontSize: '20px' }}>📦</span>
+                  <span style={{ color: '#facc15', fontWeight: 'bold', fontSize: '13px' }}>Payment After Delivery</span>
+                </div>
+                <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.5)' }}>
+                  You will NOT be charged now. When your product arrives, go to <strong>"My Orders"</strong> and scan the QR code to complete payment.
+                </p>
+              </div>
+              
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <button onClick={() => setShowCheckout(false)} style={{ flex: 1, padding: '12px', background: 'transparent', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '8px', color: 'rgba(255,255,255,0.6)', cursor: 'pointer' }}>Cancel</button>
+                <button onClick={processCheckout} disabled={loading} style={{ flex: 1, padding: '12px', background: '#4ade80', border: 'none', borderRadius: '8px', color: '#060c04', fontWeight: 'bold', cursor: 'pointer' }}>Create Order →</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Notification Modal */}
+        {showNotificationModal && (
           <div style={{
-            marginTop: '24px',
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            flexWrap: 'wrap', gap: '8px',
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0,0,0,0.85)',
+            backdropFilter: 'blur(8px)',
+            zIndex: 2000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
           }}>
-            <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.18)' }}>
-              Showing {activeTab === 'harvests' ? filteredHarvests.length : orders.length} items · All data stored on Polygon Amoy
-            </span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#4ade80', display: 'inline-block', animation: 'pulse-dot 2s infinite' }} />
-              <span style={{ fontSize: '9px', color: 'rgba(74,222,128,0.5)', letterSpacing: '1.5px', textTransform: 'uppercase' }}>Live · Block #18,442,207</span>
-            </div>
-          </div>
-        </main>
-      </div>
-
-      {/* Harvest Details Modal */}
-      {showDetailsModal && selectedHarvest && (
-        <div className="modal-overlay" onClick={closeModal}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-              <h2 style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: '36px', color: '#4ade80', letterSpacing: '2px', margin: 0 }}>
-                HARVEST DETAILS
-              </h2>
-              <button onClick={closeModal} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)', fontSize: '24px', cursor: 'pointer' }}>✕</button>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '24px', padding: '16px', background: 'rgba(74,222,128,0.05)', borderRadius: '12px' }}>
-              <div style={{ fontSize: '64px' }}>{selectedHarvest.image || '🌾'}</div>
-              <div>
-                <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#fff' }}>{selectedHarvest.name}</div>
-                <div style={{ fontSize: '12px', color: '#4ade80', fontFamily: 'monospace' }}>ID: {selectedHarvest.id}</div>
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
-              <div style={{ padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px' }}>
-                <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)' }}>👨‍🌾 Farmer</div>
-                <div style={{ fontSize: '14px', color: '#fff' }}>{selectedHarvest.farmer}</div>
-              </div>
-              <div style={{ padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px' }}>
-                <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)' }}>🌱 Crop Type</div>
-                <div style={{ fontSize: '14px', color: '#fff' }}>{selectedHarvest.crop}</div>
-              </div>
-              <div style={{ padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px' }}>
-                <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)' }}>📅 Planted Date</div>
-                <div style={{ fontSize: '14px', color: '#fff' }}>{selectedHarvest.planted_date || 'N/A'}</div>
-              </div>
-              <div style={{ padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px' }}>
-                <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)' }}>📅 Harvest Date</div>
-                <div style={{ fontSize: '14px', color: '#fff' }}>{selectedHarvest.harvest_date}</div>
-              </div>
-              <div style={{ padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px' }}>
-                <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)' }}>⏱️ Growing Period</div>
-                <div style={{ fontSize: '14px', color: '#4ade80' }}>{calculateGrowingDays(selectedHarvest.planted_date, selectedHarvest.harvest_date)}</div>
-              </div>
-              <div style={{ padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px' }}>
-                <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)' }}>🧪 Chemicals Used</div>
-                <div style={{ fontSize: '14px', color: selectedHarvest.chemicals === 'None' || !selectedHarvest.chemicals ? '#4ade80' : '#facc15' }}>
-                  {selectedHarvest.chemicals || 'None'}
-                </div>
-              </div>
-              <div style={{ padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px' }}>
-                <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)' }}>📍 Location</div>
-                <div style={{ fontSize: '14px', color: '#fff' }}>{selectedHarvest.location}</div>
-              </div>
-              <div style={{ padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px' }}>
-                <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)' }}>💰 Price</div>
-                <div style={{ fontSize: '14px', color: '#4ade80', fontWeight: 'bold' }}>R{selectedHarvest.price} / {selectedHarvest.unit}</div>
-              </div>
-              <div style={{ padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px' }}>
-                <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)' }}>📦 Stock Available</div>
-                <div style={{ fontSize: '14px', color: selectedHarvest.stock > 0 ? '#fff' : '#f87171' }}>{selectedHarvest.stock} {selectedHarvest.unit}s</div>
-              </div>
-              <div style={{ padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px' }}>
-                <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)' }}>🔗 Blockchain Status</div>
-                <div style={{ fontSize: '14px', color: '#4ade80' }}>✓ Verified on Polygon</div>
-              </div>
-            </div>
-
-            {/* Blockchain Hash */}
-            {selectedHarvest.blockchain_hash && (
-              <div style={{ padding: '16px', background: 'rgba(74,222,128,0.04)', border: '1px solid rgba(74,222,128,0.12)', borderRadius: '8px', marginBottom: '24px' }}>
-                <div style={{ fontSize: '9px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)', marginBottom: '8px' }}>🔒 SHA-256 Blockchain Hash</div>
-                <div style={{ fontFamily: 'monospace', fontSize: '11px', color: '#4ade80', wordBreak: 'break-all' }}>{selectedHarvest.blockchain_hash}</div>
-              </div>
-            )}
-
-            {/* Description */}
-            {selectedHarvest.description && (
-              <div style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', marginBottom: '24px' }}>
-                <div style={{ fontSize: '9px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)', marginBottom: '8px' }}>📝 Description</div>
-                <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.7)', lineHeight: '1.6' }}>{selectedHarvest.description}</div>
-              </div>
-            )}
-
-            {/* Action Buttons */}
-            <div style={{ display: 'flex', gap: '12px' }}>
-              <button
-                onClick={() => {
-                  closeModal()
-                  navigate(`/qr-viewer?id=${selectedHarvest.id}`)
-                }}
-                style={{
-                  flex: 1,
-                  padding: '12px',
-                  background: 'rgba(74,222,128,0.1)',
-                  border: '1px solid rgba(74,222,128,0.4)',
-                  borderRadius: '8px',
-                  color: '#4ade80',
-                  fontSize: '12px',
-                  fontWeight: 'bold',
-                  cursor: 'pointer'
-                }}
-              >
-                📱 View QR Code
-              </button>
-              <button
-                onClick={closeModal}
-                style={{
-                  flex: 1,
-                  padding: '12px',
-                  background: 'transparent',
-                  border: '1px solid rgba(255,255,255,0.2)',
-                  borderRadius: '8px',
-                  color: 'rgba(255,255,255,0.6)',
-                  cursor: 'pointer'
-                }}
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Approve Order Modal */}
-      {showApproveModal && selectedOrder && (
-        <div className="modal-overlay" onClick={() => setShowApproveModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-              <h2 style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: '28px', color: '#4ade80', letterSpacing: '2px', margin: 0 }}>
-                APPROVE ORDER
-              </h2>
-              <button onClick={() => setShowApproveModal(false)} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)', fontSize: '24px', cursor: 'pointer' }}>✕</button>
-            </div>
-
-            <div style={{ marginBottom: '24px' }}>
-              <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.6)', marginBottom: '20px' }}>
-                Set a delivery date for order <strong style={{ color: '#4ade80' }}>#{selectedOrder.id}</strong>. The buyer will be notified immediately.
-              </p>
-              
-              <label style={{ fontSize: '12px', color: '#4ade80', display: 'block', marginBottom: '8px' }}>
-                Expected Delivery Date:
-              </label>
-              <input
-                type="date"
-                value={deliveryDate}
-                onChange={(e) => setDeliveryDate(e.target.value)}
-                min={new Date().toISOString().split('T')[0]}
-                style={{
-                  width: '100%',
-                  padding: '12px',
-                  background: 'rgba(255,255,255,0.05)',
-                  border: '1px solid rgba(74,222,128,0.3)',
-                  borderRadius: '8px',
-                  color: '#fff',
-                  fontSize: '14px',
-                  marginBottom: '20px'
-                }}
-              />
-              
+            <div className="notification-modal" style={{
+              background: '#060c04',
+              border: '1px solid rgba(74,222,128,0.3)',
+              borderRadius: '20px',
+              width: '90%',
+              maxWidth: '500px',
+              maxHeight: '80vh',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden'
+            }}>
+              {/* Modal Header */}
               <div style={{
-                padding: '12px',
-                background: 'rgba(96,165,250,0.05)',
-                borderRadius: '8px',
-                marginBottom: '20px',
-                textAlign: 'left'
+                padding: '20px 24px',
+                borderBottom: '1px solid rgba(74,222,128,0.2)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                background: 'rgba(74,222,128,0.05)'
               }}>
-                <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.5)', marginBottom: '8px' }}>
-                  Order Summary:
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <span style={{ fontSize: '24px' }}>🔔</span>
+                  <h3 style={{ color: '#fff', margin: 0, fontSize: '18px', fontWeight: 'bold' }}>
+                    Notifications
+                  </h3>
+                  {buyerNotificationCount > 0 && (
+                    <span style={{
+                      background: '#f87171',
+                      color: '#fff',
+                      borderRadius: '20px',
+                      padding: '2px 8px',
+                      fontSize: '11px',
+                      fontWeight: 'bold'
+                    }}>
+                      {buyerNotificationCount} new
+                    </span>
+                  )}
                 </div>
-                <div style={{ fontSize: '12px', color: '#fff' }}>
-                  Total Amount: <strong style={{ color: '#4ade80' }}>R{selectedOrder.total?.toFixed(2)}</strong>
-                </div>
-                <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.5)', marginTop: '8px' }}>
-                  Buyer will be notified with delivery date and can complete payment upon receipt.
-                </div>
+                <button
+                  onClick={() => setShowNotificationModal(false)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'rgba(255,255,255,0.5)',
+                    fontSize: '24px',
+                    cursor: 'pointer',
+                    padding: '4px 8px'
+                  }}
+                >
+                  ✕
+                </button>
               </div>
-            </div>
-            
-            <div style={{ display: 'flex', gap: '12px' }}>
-              <button
-                onClick={() => {
-                  setShowApproveModal(false)
-                  setSelectedOrder(null)
-                  setDeliveryDate('')
-                }}
-                style={{
-                  flex: 1,
-                  padding: '12px',
-                  background: 'transparent',
-                  border: '1px solid rgba(255,255,255,0.2)',
-                  borderRadius: '8px',
-                  color: 'rgba(255,255,255,0.6)',
-                  cursor: 'pointer'
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => approveOrder(selectedOrder, deliveryDate)}
-                disabled={processing || !deliveryDate}
-                style={{
-                  flex: 1,
-                  padding: '12px',
-                  background: processing || !deliveryDate ? 'rgba(74,222,128,0.3)' : '#4ade80',
-                  border: 'none',
-                  borderRadius: '8px',
-                  color: processing || !deliveryDate ? 'rgba(255,255,255,0.5)' : '#060c04',
-                  fontWeight: 'bold',
-                  cursor: processing || !deliveryDate ? 'not-allowed' : 'pointer'
-                }}
-              >
-                {processing ? 'Approving...' : '✓ Approve & Notify Buyer'}
-              </button>
+
+              {/* Modal Body - Notifications List */}
+              <div style={{
+                flex: 1,
+                overflowY: 'auto',
+                padding: '16px'
+              }}>
+                {buyerNotifications.length === 0 ? (
+                  <div style={{
+                    textAlign: 'center',
+                    padding: '60px 20px',
+                    color: 'rgba(255,255,255,0.4)'
+                  }}>
+                    <div style={{ fontSize: '48px', marginBottom: '16px' }}>🔕</div>
+                    <p>No notifications yet</p>
+                    <p style={{ fontSize: '12px', marginTop: '8px' }}>
+                      When farmers approve your orders, you'll see them here.
+                    </p>
+                  </div>
+                ) : (
+                  buyerNotifications.map(notif => (
+                    <div
+                      key={notif.id}
+                      className="notification-item"
+                      onClick={() => markNotificationAsRead(notif.id)}
+                      style={{
+                        padding: '16px',
+                        marginBottom: '12px',
+                        background: notif.read ? 'rgba(255,255,255,0.02)' : 'rgba(74,222,128,0.08)',
+                        borderRadius: '12px',
+                        border: `1px solid ${notif.read ? 'rgba(255,255,255,0.05)' : 'rgba(74,222,128,0.2)'}`,
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                        <div style={{
+                          width: '40px',
+                          height: '40px',
+                          borderRadius: '50%',
+                          background: notif.type === 'order_approved' ? 'rgba(74,222,128,0.15)' : 'rgba(96,165,250,0.15)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '20px'
+                        }}>
+                          {notif.type === 'order_approved' ? '✅' : '📦'}
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{
+                            fontSize: '13px',
+                            fontWeight: notif.read ? 'normal' : 'bold',
+                            color: notif.read ? 'rgba(255,255,255,0.7)' : '#fff',
+                            marginBottom: '6px',
+                            lineHeight: '1.4'
+                          }}>
+                            {notif.message}
+                          </div>
+                          {notif.delivery_date && (
+                            <div style={{
+                              fontSize: '11px',
+                              color: '#4ade80',
+                              marginTop: '6px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px'
+                            }}>
+                              <span>🚚</span>
+                              <span>Delivery: {new Date(notif.delivery_date).toLocaleDateString()}</span>
+                            </div>
+                          )}
+                          <div style={{
+                            fontSize: '10px',
+                            color: 'rgba(255,255,255,0.3)',
+                            marginTop: '8px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px'
+                          }}>
+                            <span>📅</span>
+                            <span>{new Date(notif.created_at).toLocaleString()}</span>
+                            {!notif.read && (
+                              <span style={{
+                                background: '#4ade80',
+                                color: '#060c04',
+                                borderRadius: '4px',
+                                padding: '2px 6px',
+                                fontSize: '9px',
+                                marginLeft: '8px'
+                              }}>
+                                New
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              {buyerNotifications.length > 0 && (
+                <div style={{
+                  padding: '16px 24px',
+                  borderTop: '1px solid rgba(74,222,128,0.2)',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: '12px',
+                  background: 'rgba(0,0,0,0.3)'
+                }}>
+                  <button
+                    onClick={markAllNotificationsAsRead}
+                    style={{
+                      flex: 1,
+                      padding: '10px',
+                      background: 'transparent',
+                      border: '1px solid rgba(96,165,250,0.3)',
+                      borderRadius: '8px',
+                      color: '#60a5fa',
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(96,165,250,0.1)'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    Mark All as Read
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowNotificationModal(false)
+                      navigate('/buyer-orders')
+                    }}
+                    style={{
+                      flex: 1,
+                      padding: '10px',
+                      background: '#4ade80',
+                      border: 'none',
+                      borderRadius: '8px',
+                      color: '#060c04',
+                      fontSize: '12px',
+                      fontWeight: 'bold',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    View My Orders →
+                  </button>
+                </div>
+              )}
             </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* QR Verification Modal */}
+        {showQrModal && (
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.95)', zIndex: 1002, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ background: '#060c04', border: `1px solid ${qrResult ? (qrResult.success ? 'rgba(74,222,128,0.5)' : 'rgba(248,113,113,0.5)') : 'rgba(96,165,250,0.3)'}`, borderRadius: '16px', padding: '32px', maxWidth: '450px', width: '90%', textAlign: 'center' }}>
+              <h3 style={{ color: '#fff', marginBottom: '16px' }}>🔍 Verify Product QR Code</h3>
+              <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '20px' }}>Enter the Harvest ID from the QR code on your delivered product</p>
+              
+              {!qrResult ? (
+                <>
+                  <div style={{ marginBottom: '20px' }}>
+                    <input type="text" placeholder="Enter Harvest ID (e.g., HC-0012)" value={qrInput} onChange={(e) => setQrInput(e.target.value.toUpperCase())} style={{ width: '100%', padding: '14px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: '#fff', fontSize: '14px', fontFamily: 'monospace', textAlign: 'center' }} autoFocus />
+                  </div>
+                  <button onClick={verifyProduct} disabled={verifying} style={{ width: '100%', padding: '14px', background: verifying ? 'rgba(96,165,250,0.3)' : '#4ade80', border: 'none', borderRadius: '8px', color: verifying ? 'rgba(255,255,255,0.5)' : '#060c04', fontWeight: 'bold', cursor: verifying ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                    {verifying ? (<><span style={{ width: '16px', height: '16px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.8s linear infinite', display: 'inline-block' }} /> Verifying on Blockchain...</>) : ('✓ Verify on Blockchain')}
+                  </button>
+                </>
+              ) : (
+                <div>
+                  <div style={{ width: '60px', height: '60px', borderRadius: '50%', background: qrResult.success ? 'rgba(74,222,128,0.15)' : 'rgba(248,113,113,0.15)', border: `2px solid ${qrResult.success ? '#4ade80' : '#f87171'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', fontSize: '32px' }}>{qrResult.success ? '✓' : '⚠'}</div>
+                  <h4 style={{ color: qrResult.success ? '#4ade80' : '#f87171', marginBottom: '12px' }}>{qrResult.success ? 'PRODUCT VERIFIED!' : 'VERIFICATION FAILED'}</h4>
+                  <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.7)', lineHeight: '1.6', marginBottom: '16px' }}>{qrResult.message}</p>
+                  {qrResult.product && qrResult.success && (
+                    <div style={{ padding: '12px', background: 'rgba(74,222,128,0.05)', borderRadius: '8px', textAlign: 'left' }}>
+                      <div style={{ fontSize: '10px', color: '#4ade80', marginBottom: '8px' }}>📋 Blockchain Record</div>
+                      <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.6)' }}>
+                        <div>• Product: {qrResult.product.name}</div>
+                        <div>• Farmer: {qrResult.product.farmer}</div>
+                        <div>• Harvest Date: {qrResult.product.harvest_date}</div>
+                        <div>• Chemicals: {qrResult.product.chemicals || 'None'}</div>
+                        <div>• Location: {qrResult.product.location}</div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              <button onClick={() => { setShowQrModal(false); setQrResult(null); setQrInput(''); }} style={{ marginTop: '24px', padding: '10px 20px', background: 'transparent', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '8px', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', width: '100%' }}>Close</button>
+            </div>
+          </div>
+        )}
+      </div>
     </>
   )
 }
