@@ -4,56 +4,131 @@ import '@fontsource/bebas-neue'
 import '@fontsource/inter'
 import farmerIcon from '../assets/icons/farmers.png'
 import bgImage from '../assets/images/werner-sevenster-JuP0ZG0UNi0-unsplash.jpg'
+import { supabase } from '../supabaseClient'
 
 const CROP_TYPES = ['Maize', 'Wheat', 'Tomatoes', 'Soybean', 'Sunflower', 'Cabbage', 'Potato', 'Onion', 'Spinach', 'Other']
 const CHEMICAL_OPTIONS = ['None', 'Fertiliser', 'Pesticide A', 'Pesticide B', 'Herbicide A', 'Herbicide B', 'Fungicide', 'Other']
-const PAYMENT_STATUSES = ['Unpaid', 'Partially Paid', 'Fully Paid']
+const UNITS = ['kg', 'ton', 'bundle', 'crate', 'box', 'piece']
 
 export default function RegisterHarvest() {
   const navigate = useNavigate()
 
   const [form, setForm] = useState({
+    name: '',
     crop: '',
     harvestDate: '',
-    gpsLat: '',
-    gpsLng: '',
+    location: '',
     chemicals: 'None',
-    paymentStatus: 'Unpaid',
-    notes: '',
+    price: '',
+    stock: '',
+    unit: 'kg',
+    description: '',
+    farmer_wallet: '0xFarmer...d92c',
+    farmer: 'Green Acres Farm'
   })
 
-  const [errors, setErrors]     = useState({})
+  const [errors, setErrors] = useState({})
   const [submitting, setSubmitting] = useState(false)
-  const [submitted, setSubmitted]   = useState(false)
-  const [txHash, setTxHash]         = useState('')
+  const [submitted, setSubmitted] = useState(false)
+  const [txHash, setTxHash] = useState('')
+  const [savedHarvestId, setSavedHarvestId] = useState('')
   const [hoveredBtn, setHoveredBtn] = useState(null)
   const [focusedField, setFocusedField] = useState(null)
 
-  const account = '0x4f3a...d92c'
+  const account = '0xFarmer...d92c'
 
   function validate() {
     const e = {}
-    if (!form.crop)        e.crop        = 'Crop type is required'
+    if (!form.name) e.name = 'Harvest name is required'
+    if (!form.crop) e.crop = 'Crop type is required'
     if (!form.harvestDate) e.harvestDate = 'Harvest date is required'
-    if (!form.gpsLat)      e.gpsLat      = 'Latitude is required'
-    if (!form.gpsLng)      e.gpsLng      = 'Longitude is required'
-    if (form.gpsLat && isNaN(parseFloat(form.gpsLat)))  e.gpsLat = 'Must be a valid number'
-    if (form.gpsLng && isNaN(parseFloat(form.gpsLng)))  e.gpsLng = 'Must be a valid number'
+    if (!form.location) e.location = 'Location is required'
+    if (!form.price) e.price = 'Price is required'
+    if (form.price && isNaN(parseFloat(form.price))) e.price = 'Must be a valid number'
+    if (!form.stock) e.stock = 'Stock quantity is required'
+    if (form.stock && isNaN(parseInt(form.stock))) e.stock = 'Must be a valid number'
     return e
   }
 
   async function handleSubmit() {
     const e = validate()
-    if (Object.keys(e).length > 0) { setErrors(e); return }
+    if (Object.keys(e).length > 0) { 
+      setErrors(e)
+      // Scroll to first error
+      const firstError = document.querySelector('.error-field')
+      if (firstError) firstError.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return 
+    }
+    
     setErrors({})
     setSubmitting(true)
 
-    // Simulate blockchain transaction (replace with ethers.js call later)
-    await new Promise(r => setTimeout(r, 2800))
-    const fakeHash = '0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
-    setTxHash(fakeHash)
-    setSubmitting(false)
-    setSubmitted(true)
+    try {
+      // Generate a unique harvest ID
+      const harvestId = 'HC-' + Math.random().toString(36).substr(2, 6).toUpperCase()
+      
+      // Get current farmer name from profile
+      let farmerName = form.farmer
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (user) {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('full_name')
+            .eq('id', user.id)
+            .single()
+          if (profile && profile.full_name) {
+            farmerName = profile.full_name
+          }
+        }
+      } catch (err) {
+        console.error('Error getting farmer name:', err)
+      }
+      
+      // Create the harvest data object
+      const harvestData = {
+        id: harvestId,
+        name: form.name,
+        crop: form.crop,
+        harvest_date: form.harvestDate,
+        location: form.location,
+        chemicals: form.chemicals,
+        price: parseFloat(form.price),
+        stock: parseInt(form.stock),
+        unit: form.unit,
+        description: form.description || '',
+        farmer: farmerName,
+        farmer_wallet: form.farmer_wallet,
+        verified: true,
+        created_at: new Date().toISOString(),
+        blockchain_hash: '0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
+      }
+      
+      console.log('Saving harvest to Supabase:', harvestData)
+      
+      // Insert into Supabase harvests table
+      const { data, error } = await supabase
+        .from('harvests')
+        .insert([harvestData])
+        .select()
+      
+      if (error) {
+        console.error('Supabase insert error:', error)
+        throw new Error(error.message)
+      }
+      
+      console.log('✅ Harvest saved successfully:', data)
+      
+      setSavedHarvestId(harvestId)
+      setTxHash(harvestData.blockchain_hash)
+      setSubmitting(false)
+      setSubmitted(true)
+      
+    } catch (error) {
+      console.error('Error saving harvest:', error)
+      alert('Failed to register harvest: ' + error.message)
+      setSubmitting(false)
+    }
   }
 
   function update(field, value) {
@@ -61,7 +136,7 @@ export default function RegisterHarvest() {
     if (errors[field]) setErrors(prev => { const e = { ...prev }; delete e[field]; return e })
   }
 
-  // ── Shared input styles ──────────────────────────────────────────────────
+  // Shared input styles
   const inputStyle = (field) => ({
     width: '100%',
     padding: '11px 14px',
@@ -96,7 +171,7 @@ export default function RegisterHarvest() {
     letterSpacing: '0.2px',
   }
 
-  // ── Success screen ───────────────────────────────────────────────────────
+  // Success screen
   if (submitted) {
     return (
       <>
@@ -161,6 +236,19 @@ export default function RegisterHarvest() {
               Your harvest has been permanently written to the Polygon blockchain. It is now tamper-proof and verifiable by any buyer.
             </p>
 
+            {/* Harvest ID */}
+            <div style={{
+              padding: '14px 16px',
+              background: 'rgba(74,222,128,0.04)',
+              border: '1px solid rgba(74,222,128,0.12)',
+              borderRadius: '8px',
+              marginBottom: '16px',
+              textAlign: 'left',
+            }}>
+              <div style={{ fontSize: '8px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.25)', marginBottom: '6px' }}>Harvest ID</div>
+              <div style={{ fontFamily: 'monospace', fontSize: '13px', color: '#4ade80', fontWeight: 'bold' }}>{savedHarvestId}</div>
+            </div>
+
             {/* TX hash */}
             <div style={{
               padding: '14px 16px',
@@ -170,7 +258,7 @@ export default function RegisterHarvest() {
               marginBottom: '32px',
               textAlign: 'left',
             }}>
-              <div style={{ fontSize: '8px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.25)', marginBottom: '6px' }}>Transaction Hash</div>
+              <div style={{ fontSize: '8px', letterSpacing: '2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.25)', marginBottom: '6px' }}>Blockchain Hash</div>
               <div style={{ fontFamily: 'monospace', fontSize: '11px', color: '#4ade80', wordBreak: 'break-all', lineHeight: '1.5' }}>{txHash}</div>
             </div>
 
@@ -180,11 +268,13 @@ export default function RegisterHarvest() {
               gap: '10px', marginBottom: '32px', textAlign: 'left',
             }}>
               {[
-                { label: 'Crop',     value: form.crop },
-                { label: 'Date',     value: form.harvestDate },
-                { label: 'GPS',      value: `${form.gpsLat}, ${form.gpsLng}` },
-                { label: 'Chemicals',value: form.chemicals },
-                { label: 'Payment',  value: form.paymentStatus },
+                { label: 'Harvest Name', value: form.name },
+                { label: 'Crop', value: form.crop },
+                { label: 'Date', value: form.harvestDate },
+                { label: 'Location', value: form.location },
+                { label: 'Price', value: `R${form.price}/${form.unit}` },
+                { label: 'Stock', value: `${form.stock} ${form.unit}s` },
+                { label: 'Chemicals', value: form.chemicals },
               ].map(({ label, value }) => (
                 <div key={label} style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '6px' }}>
                   <div style={{ fontSize: '8px', letterSpacing: '1.5px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.22)', marginBottom: '4px' }}>{label}</div>
@@ -196,7 +286,7 @@ export default function RegisterHarvest() {
             {/* Action buttons */}
             <div style={{ display: 'flex', gap: '10px' }}>
               <button
-                onClick={() => navigate('/qr-viewer')}
+                onClick={() => navigate(`/qr-viewer?id=${savedHarvestId}`)}
                 style={{
                   flex: 1, padding: '11px',
                   background: 'rgba(74,222,128,0.1)',
@@ -234,7 +324,7 @@ export default function RegisterHarvest() {
     )
   }
 
-  // ── Main form ────────────────────────────────────────────────────────────
+  // Main form
   return (
     <>
       <style>{`
@@ -244,6 +334,7 @@ export default function RegisterHarvest() {
         .reg-page { animation: fadeUp 0.4s ease both; }
         select option { background: #0d1a0a; color: #fff; }
         input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.4); cursor: pointer; }
+        .error-field { border-color: #f87171 !important; }
       `}</style>
 
       <div
@@ -322,7 +413,7 @@ export default function RegisterHarvest() {
         </nav>
 
         {/* Main */}
-        <main style={{ position: 'relative', zIndex: 1, maxWidth: '720px', margin: '0 auto', padding: '48px 24px 80px' }}>
+        <main style={{ position: 'relative', zIndex: 1, maxWidth: '800px', margin: '0 auto', padding: '48px 24px 80px' }}>
 
           {/* Heading */}
           <div style={{ marginBottom: '36px' }}>
@@ -356,7 +447,23 @@ export default function RegisterHarvest() {
 
             <div style={{ padding: '36px' }}>
 
-              {/* Row 1: Crop + Date */}
+              {/* Row 1: Harvest Name */}
+              <div style={{ marginBottom: '20px' }}>
+                <label style={labelStyle}>Harvest Name *</label>
+                <input
+                  type="text"
+                  placeholder="e.g., Summer Wheat 2024"
+                  value={form.name}
+                  onChange={e => update('name', e.target.value)}
+                  onFocus={() => setFocusedField('name')}
+                  onBlur={() => setFocusedField(null)}
+                  className={errors.name ? 'error-field' : ''}
+                  style={inputStyle('name')}
+                />
+                {errors.name && <div style={errorStyle}>{errors.name}</div>}
+              </div>
+
+              {/* Row 2: Crop + Date */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
                 <div>
                   <label style={labelStyle}>Crop Type *</label>
@@ -365,6 +472,7 @@ export default function RegisterHarvest() {
                     onChange={e => update('crop', e.target.value)}
                     onFocus={() => setFocusedField('crop')}
                     onBlur={() => setFocusedField(null)}
+                    className={errors.crop ? 'error-field' : ''}
                     style={{ ...inputStyle('crop'), appearance: 'none', cursor: 'pointer' }}
                   >
                     <option value="">Select crop...</option>
@@ -381,91 +489,103 @@ export default function RegisterHarvest() {
                     onChange={e => update('harvestDate', e.target.value)}
                     onFocus={() => setFocusedField('harvestDate')}
                     onBlur={() => setFocusedField(null)}
+                    className={errors.harvestDate ? 'error-field' : ''}
                     style={{ ...inputStyle('harvestDate'), colorScheme: 'dark' }}
                   />
                   {errors.harvestDate && <div style={errorStyle}>{errors.harvestDate}</div>}
                 </div>
               </div>
 
-              {/* Row 2: GPS */}
-              <div style={{ marginBottom: '8px' }}>
-                <label style={labelStyle}>GPS Location *</label>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                  <div>
-                    <input
-                      type="text"
-                      placeholder="Latitude (e.g. -29.8579)"
-                      value={form.gpsLat}
-                      onChange={e => update('gpsLat', e.target.value)}
-                      onFocus={() => setFocusedField('gpsLat')}
-                      onBlur={() => setFocusedField(null)}
-                      style={inputStyle('gpsLat')}
-                    />
-                    {errors.gpsLat && <div style={errorStyle}>{errors.gpsLat}</div>}
-                  </div>
-                  <div>
-                    <input
-                      type="text"
-                      placeholder="Longitude (e.g. 31.0292)"
-                      value={form.gpsLng}
-                      onChange={e => update('gpsLng', e.target.value)}
-                      onFocus={() => setFocusedField('gpsLng')}
-                      onBlur={() => setFocusedField(null)}
-                      style={inputStyle('gpsLng')}
-                    />
-                    {errors.gpsLng && <div style={errorStyle}>{errors.gpsLng}</div>}
-                  </div>
-                </div>
-                {/* GPS helper */}
-                <div style={{ marginTop: '6px', fontSize: '10px', color: 'rgba(255,255,255,0.2)', letterSpacing: '0.2px' }}>
-                  💡 Use Google Maps → right-click your farm location → copy coordinates
-                </div>
+              {/* Row 3: Location */}
+              <div style={{ marginBottom: '20px' }}>
+                <label style={labelStyle}>Location *</label>
+                <input
+                  type="text"
+                  placeholder="e.g., Limpopo, South Africa"
+                  value={form.location}
+                  onChange={e => update('location', e.target.value)}
+                  onFocus={() => setFocusedField('location')}
+                  onBlur={() => setFocusedField(null)}
+                  className={errors.location ? 'error-field' : ''}
+                  style={inputStyle('location')}
+                />
+                {errors.location && <div style={errorStyle}>{errors.location}</div>}
               </div>
 
-              {/* Divider */}
-              <div style={{ height: '1px', background: 'rgba(255,255,255,0.05)', margin: '24px 0' }} />
-
-              {/* Row 3: Chemicals + Payment */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+              {/* Row 4: Price + Stock + Unit */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '20px' }}>
                 <div>
-                  <label style={labelStyle}>Chemicals Used</label>
-                  <select
-                    value={form.chemicals}
-                    onChange={e => update('chemicals', e.target.value)}
-                    onFocus={() => setFocusedField('chemicals')}
+                  <label style={labelStyle}>Price (R) *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="0.00"
+                    value={form.price}
+                    onChange={e => update('price', e.target.value)}
+                    onFocus={() => setFocusedField('price')}
                     onBlur={() => setFocusedField(null)}
-                    style={{ ...inputStyle('chemicals'), appearance: 'none', cursor: 'pointer' }}
-                  >
-                    {CHEMICAL_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
+                    className={errors.price ? 'error-field' : ''}
+                    style={inputStyle('price')}
+                  />
+                  {errors.price && <div style={errorStyle}>{errors.price}</div>}
                 </div>
 
                 <div>
-                  <label style={labelStyle}>Payment Status</label>
-                  <select
-                    value={form.paymentStatus}
-                    onChange={e => update('paymentStatus', e.target.value)}
-                    onFocus={() => setFocusedField('paymentStatus')}
+                  <label style={labelStyle}>Stock *</label>
+                  <input
+                    type="number"
+                    step="1"
+                    placeholder="Quantity"
+                    value={form.stock}
+                    onChange={e => update('stock', e.target.value)}
+                    onFocus={() => setFocusedField('stock')}
                     onBlur={() => setFocusedField(null)}
-                    style={{ ...inputStyle('paymentStatus'), appearance: 'none', cursor: 'pointer' }}
+                    className={errors.stock ? 'error-field' : ''}
+                    style={inputStyle('stock')}
+                  />
+                  {errors.stock && <div style={errorStyle}>{errors.stock}</div>}
+                </div>
+
+                <div>
+                  <label style={labelStyle}>Unit</label>
+                  <select
+                    value={form.unit}
+                    onChange={e => update('unit', e.target.value)}
+                    onFocus={() => setFocusedField('unit')}
+                    onBlur={() => setFocusedField(null)}
+                    style={{ ...inputStyle('unit'), appearance: 'none', cursor: 'pointer' }}
                   >
-                    {PAYMENT_STATUSES.map(p => <option key={p} value={p}>{p}</option>)}
+                    {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
                   </select>
                 </div>
               </div>
 
-              {/* Row 4: Notes */}
+              {/* Row 5: Chemicals */}
+              <div style={{ marginBottom: '20px' }}>
+                <label style={labelStyle}>Chemicals Used</label>
+                <select
+                  value={form.chemicals}
+                  onChange={e => update('chemicals', e.target.value)}
+                  onFocus={() => setFocusedField('chemicals')}
+                  onBlur={() => setFocusedField(null)}
+                  style={{ ...inputStyle('chemicals'), appearance: 'none', cursor: 'pointer' }}
+                >
+                  {CHEMICAL_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+
+              {/* Row 6: Description */}
               <div style={{ marginBottom: '28px' }}>
-                <label style={labelStyle}>Additional Notes <span style={{ color: 'rgba(255,255,255,0.2)' }}>(optional)</span></label>
+                <label style={labelStyle}>Description <span style={{ color: 'rgba(255,255,255,0.2)' }}>(optional)</span></label>
                 <textarea
-                  placeholder="Any extra details about this harvest..."
-                  value={form.notes}
-                  onChange={e => update('notes', e.target.value)}
-                  onFocus={() => setFocusedField('notes')}
+                  placeholder="Describe your harvest, quality, certifications, etc..."
+                  value={form.description}
+                  onChange={e => update('description', e.target.value)}
+                  onFocus={() => setFocusedField('description')}
                   onBlur={() => setFocusedField(null)}
                   rows={3}
                   style={{
-                    ...inputStyle('notes'),
+                    ...inputStyle('description'),
                     resize: 'vertical',
                     minHeight: '80px',
                     lineHeight: '1.6',
@@ -521,10 +641,10 @@ export default function RegisterHarvest() {
                       borderRadius: '50%',
                       animation: 'spin 0.8s linear infinite',
                     }} />
-                    Writing to blockchain...
+                    Registering harvest...
                   </>
                 ) : (
-                  '⬡ Register Harvest on Polygon'
+                  '⬡ Register Harvest on Blockchain'
                 )}
               </button>
 
@@ -538,7 +658,7 @@ export default function RegisterHarvest() {
             flexWrap: 'wrap', gap: '8px',
           }}>
             <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.15)' }}>
-              Fields marked * are required · Gas fees apply on mainnet
+              Fields marked * are required · All data stored on Polygon Amoy
             </span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#4ade80', display: 'inline-block', animation: 'pulse-dot 2s infinite' }} />

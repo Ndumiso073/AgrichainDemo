@@ -12,11 +12,13 @@ import FarmerDashboard  from './pages/FarmerDashboard'
 import RegisterHarvest  from './pages/RegisterHarvest'
 import QRViewer         from './pages/QRViewer'
 import BuyerScanner     from './pages/BuyerScanner'
+import BuyerOrders      from './pages/BuyerOrders'  // ADD THIS IMPORT
 import VerifyResult     from './pages/VerifyResult'
 import AdminDashboard   from './pages/AdminDashboard'
 import UserManagement   from './pages/UserManagement'
 import ForgotPassword from './pages/ForgotPassword'
 import Resetpassword  from './pages/Resetpassword'
+import SensorDashboard from './pages/SensorDashboard'
 
 function App() {
   return (
@@ -31,6 +33,7 @@ function App() {
           <Route path="/unauthorized" element={<Unauthorized />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password"  element={<Resetpassword />} />
+          <Route path="/sensor-dashboard" element={<SensorDashboard />} />
 
           {/* Farmer-only routes */}
           <Route path="/farmer" element={
@@ -55,6 +58,14 @@ function App() {
               <BuyerScanner />
             </ProtectedRoute>
           } />
+          
+          {/* ADD THIS: Buyer Orders Route */}
+          <Route path="/buyer-orders" element={
+            <ProtectedRoute allowedRoles={['buyer']}>
+              <BuyerOrders />
+            </ProtectedRoute>
+          } />
+          
           <Route path="/verify-result" element={
             <ProtectedRoute allowedRoles={['buyer', 'admin']}>
               <VerifyResult />
