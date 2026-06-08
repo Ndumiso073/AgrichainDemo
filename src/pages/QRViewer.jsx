@@ -6,6 +6,7 @@ import farmerIcon from '../assets/icons/farmers.png'
 import bgImage from '../assets/images/stijn-te-strake-UdhpcfImQ9Y-unsplash.jpg'
 import { supabase } from '../supabaseClient'
 import { QRCodeCanvas } from 'qrcode.react'
+import { useWallet } from '../hooks/useWallet'
 
 export default function QRViewer() {
   const navigate = useNavigate()
@@ -17,8 +18,13 @@ export default function QRViewer() {
   const [error, setError] = useState(null)
   const [copied, setCopied] = useState(false)
   const [hoveredBtn, setHoveredBtn] = useState(null)
+  const { account, shortAddress } = useWallet()
 
-  const account = '0xFarmer...d92c'
+  useEffect(() => {
+  if (!harvestId) {
+    navigate('/farmer')
+  }
+}, [harvestId])
 
   // Fetch harvest data from Supabase
   useEffect(() => {
@@ -67,7 +73,7 @@ export default function QRViewer() {
       chemicals: harvest.chemicals || 'None',
       location: harvest.location,
       blockchain_hash: harvest.blockchain_hash,
-      verifyUrl: `${window.location.origin}/verify-result?id=${harvest.id}`
+      verifyUrl: `${import.meta.env.VITE_APP_URL || window.location.origin}/verify-result?id=${harvest.id}`
     }
     
     return JSON.stringify(qrData, null, 2)
@@ -215,7 +221,7 @@ export default function QRViewer() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px', background: 'rgba(74,222,128,0.06)', border: '1px solid rgba(74,222,128,0.18)', borderRadius: '4px' }}>
               <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#4ade80', display: 'inline-block', animation: 'pulse-dot 2s infinite' }} />
-              <span style={{ fontSize: '10px', color: '#4ade80', fontFamily: 'monospace' }}>{account}</span>
+              <span style={{ fontSize: '10px', color: '#4ade80', fontFamily: 'monospace' }}>{shortAddress(account)}</span>
             </div>
             <button
               onClick={() => navigate('/farmer')}

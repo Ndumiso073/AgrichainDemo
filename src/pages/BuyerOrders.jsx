@@ -6,6 +6,7 @@ import buyerIcon from '../assets/icons/user.png'
 import bgImage from '../assets/images/max-O_TVsaeZNlE-unsplash.jpg'
 import { supabase } from '../supabaseClient'
 import jsQR from 'jsqr'
+import { useWallet } from '../hooks/useWallet'
 
 export default function BuyerOrders() {
   const navigate = useNavigate()
@@ -26,7 +27,7 @@ export default function BuyerOrders() {
   const streamRef = useRef(null)
   const animationRef = useRef(null)
 
-  const account = '0xBuyer...f10a'
+  const { account, shortAddress } = useWallet()
 
   // Load orders
   useEffect(() => {
@@ -312,10 +313,21 @@ export default function BuyerOrders() {
         
         if (productData) {
           const newStock = productData.stock - item.quantity
-          await supabase
-            .from('harvests')
-            .update({ stock: newStock })
-            .eq('id', item.id)
+          const { data: currentData } = await supabase
+  .from('harvests')
+  .select('stock, scan_count')
+  .eq('id', item.id)
+  .single()
+
+if (currentData) {
+  await supabase
+    .from('harvests')
+    .update({ 
+      stock: currentData.stock - item.quantity,
+      scan_count: (currentData.scan_count || 0) + 1
+    })
+    .eq('id', item.id)
+}
           console.log(`✅ Updated stock for ${item.name}: ${newStock} left`)
         }
       }
@@ -467,8 +479,7 @@ export default function BuyerOrders() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px', background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.18)', borderRadius: '4px' }}>
               <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#60a5fa', display: 'inline-block', animation: 'pulse-dot 2s infinite' }} />
-              <span style={{ fontSize: '10px', color: '#60a5fa', fontFamily: 'monospace' }}>{account}</span>
-            </div>
+              <span style={{ fontSize: '10px', color: '#60a5fa', fontFamily: 'monospace' }}>{account}</span><span style={{ fontSize: '10px', color: '#60a5fa', fontFamily: 'monospace' }}>{shortAddress(account)}</span>
             <button onClick={() => navigate('/buyer')} style={{
               background: 'transparent', border: '1px solid rgba(96,165,250,0.3)', color: '#60a5fa',
               fontSize: '10px', letterSpacing: '1.5px', textTransform: 'uppercase', padding: '5px 14px', borderRadius: '4px', cursor: 'pointer'
@@ -478,6 +489,7 @@ export default function BuyerOrders() {
               fontSize: '10px', letterSpacing: '1.5px', textTransform: 'uppercase', padding: '5px 14px', borderRadius: '4px', cursor: 'pointer'
             }}>Exit</button>
           </div>
+           </div>
         </nav>
 
         <main style={{ position: 'relative', zIndex: 1, maxWidth: '1400px', margin: '0 auto', padding: '40px 24px 80px' }}>
